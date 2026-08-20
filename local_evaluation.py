@@ -31,21 +31,68 @@ def get_system_message():
     return INSTRUCTIONS + "\n" + IN_CONTEXT_EXAMPLES
 
 
+def is_openai_compatible_judge(evaluation_model_name: str) -> bool:
+    """True for OpenAI GPT judges and OpenAI-compatible DeepSeek judges."""
+    name = evaluation_model_name.lower()
+    # Original Meta check used "chat"; also accept gpt-* defaults and deepseek-*.
+    return "chat" in name or "gpt" in name or "deepseek" in name
+
+
+def build_evaluation_client(evaluation_model_name: str) -> OpenAI:
+    """
+    Build an OpenAI SDK client for the evaluation/judge model.
+
+    - Default OpenAI GPT path: unchanged (api.openai.com + OPENAI_API_KEY).
+    - deepseek-ai/* (e.g. DeepSeek-V3.2 on SiliconFlow): OpenAI-compatible base_url.
+    """
+    name = evaluation_model_name.lower()
+    if "deepseek" in name:
+        api_key = (
+            os.getenv("SILICONFLOW_API_KEY")
+            or os.getenv("DEEPSEEK_API_KEY")
+            or os.getenv("OPENAI_API_KEY")
+        )
+        base_url = os.getenv(
+            "OPENAI_BASE_URL",
+            os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1"),
+        )
+        if not api_key:
+            raise ValueError(
+                "DeepSeek judge requires SILICONFLOW_API_KEY "
+                "(or DEEPSEEK_API_KEY / OPENAI_API_KEY)."
+            )
+        logger.info(f"Using OpenAI-compatible judge at {base_url} model={evaluation_model_name}")
+        return OpenAI(api_key=api_key, base_url=base_url)
+
+    # Original OpenAI path
+    return OpenAI()
+
+
 def attempt_api_call(client, model_name, messages, max_retries=10):
     """Attempt an API call with retries upon encountering specific errors."""
     # todo: add default response when all efforts fail
+    use_json_object = True
     for attempt in range(max_retries):
         try:
-            response = client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                response_format={"type": "json_object"},
-                temperature=0.0,
-            )
+            kwargs = {
+                "model": model_name,
+                "messages": messages,
+                "temperature": 0.0,
+            }
+            if use_json_object:
+                kwargs["response_format"] = {"type": "json_object"}
+            response = client.chat.completions.create(**kwargs)
             return response.choices[0].message.content
         except (APIConnectionError, RateLimitError):
             logger.warning(f"API call failed on attempt {attempt + 1}, retrying...")
         except Exception as e:
+            err = str(e).lower()
+            if use_json_object and ("response_format" in err or "json_object" in err):
+                logger.warning(
+                    "JSON response_format unsupported; retrying without it..."
+                )
+                use_json_object = False
+                continue
             logger.error(f"Unexpected error: {e}")
             break
     return None
@@ -196,9 +243,9 @@ def evaluate_predictions(queries, ground_truths_list, predictions, evaluation_mo
     dict: A dictionary containing evaluation results.
     """
 
-    if "chat" in evaluation_model_name.lower():
-        # now we are using chatgpt
-        openai_client = OpenAI()
+    if is_openai_compatible_judge(evaluation_model_name):
+        # OpenAI GPT (original) or OpenAI-compatible DeepSeek judge
+        openai_client = build_evaluation_client(evaluation_model_name)
         n_miss, n_correct = 0, 0
         system_message = get_system_message()
 
