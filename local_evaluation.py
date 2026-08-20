@@ -15,7 +15,6 @@ from openai import APIConnectionError, OpenAI, RateLimitError
 from prompts.templates import IN_CONTEXT_EXAMPLES, INSTRUCTIONS
 from tqdm.auto import tqdm
 from transformers import LlamaTokenizerFast
-from auto_gptq import AutoGPTQForCausalLM, BaseQuantizeConfig
 
 tokenizer = LlamaTokenizerFast.from_pretrained("tokenizer")
 
@@ -207,10 +206,17 @@ def evaluate_predictions(queries, ground_truths_list, predictions, evaluation_mo
             predictions, total=len(predictions), desc="Evaluating Predictions"
         )):
             query = queries[_idx]
-            ground_truths = ground_truths_list[_idx].strip()
+            gt = ground_truths_list[_idx]
+            if isinstance(gt, str):
+                ground_truths = [gt.strip()]
+            elif isinstance(gt, list):
+                ground_truths = [x.strip() if isinstance(x, str) else str(x) for x in gt]
+            else:
+                ground_truths = [str(gt)]
             # trim prediction to 75 tokens using Llama2 tokenizer
             prediction = trim_predictions_to_max_token_length(prediction)
             prediction = prediction.strip()
+            prediction_lowercase = prediction.lower()
 
             if "i don't know" in prediction_lowercase:
                 n_miss += 1
@@ -220,7 +226,6 @@ def evaluate_predictions(queries, ground_truths_list, predictions, evaluation_mo
 
             for ground_truth in ground_truths:
                 ground_truth_lowercase = ground_truth.lower()
-                prediction_lowercase = prediction.lower()
                 messages = [
                     {"role": "system", "content": system_message},
                     {
@@ -287,7 +292,6 @@ if __name__ == "__main__":
     participant_model = UserModel()
     queries, ground_truths, predictions = generate_predictions(DATASET_PATH, participant_model)
     # Evaluate Predictions
-    openai_client = OpenAI()
     evaluation_results = evaluate_predictions(
-        queries, ground_truths, predictions, EVALUATION_MODEL_NAME, openai_client
+        queries, ground_truths, predictions, EVALUATION_MODEL_NAME
     )
