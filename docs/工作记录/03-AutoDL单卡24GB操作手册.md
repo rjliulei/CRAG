@@ -61,6 +61,84 @@ cd CRAG
 
 关机不丢：仓库、权重、数据集都放数据盘，不要只放系统盘。
 
+### A.1 Cursor / VS Code：Remote-SSH 连接实例
+
+用本机 Cursor（或 VS Code）直接编辑服务器上的代码。实例须**已开机**。
+
+官方参考：[AutoDL · VSCode 远程开发](https://www.autodl.com/docs/vscode/)
+
+#### 1）装插件
+
+扩展里搜索并安装 **Remote - SSH**（Cursor 自带的 Remote SSH 亦可）。
+
+#### 2）从 AutoDL 控制台复制 SSH
+
+形如（端口与主机以控制台为准，**会随关机/重开变化**）：
+
+```text
+ssh -p <端口> root@connect.<区域>.seetacloud.com
+```
+
+另有登录**密码**（只在登录时输入；**勿写入仓库、勿贴进聊天/文档**）。
+
+#### 3）写入本机 SSH config（推荐）
+
+`Ctrl+Shift+P` → `Remote-SSH: Open SSH Configuration File` → 选本机：
+
+`C:\Users\<你的用户名>\.ssh\config`
+
+追加（端口与主机以控制台为准，**勿把密码写进文件**）：
+
+```ssh-config
+Host autodl-crag
+    HostName connect.<区域>.seetacloud.com
+    User root
+    Port <端口>
+```
+
+示例：若控制台为 `ssh -p 17947 root@connect.nmb1.seetacloud.com`，则 `HostName` 填 `connect.nmb1.seetacloud.com`，`Port` 填 `17947`。
+
+#### 4）连接并打开项目
+
+1. `Ctrl+Shift+P` → `Remote-SSH: Connect to Host...` → 选 `autodl-crag`
+2. 远程系统选 **Linux**
+3. 输入 AutoDL 登录密码
+4. 左下角出现 `SSH: autodl-crag` 即成功
+5. `File` → `Open Folder` → 打开 `/root/autodl-tmp/CRAG`（按实际路径）
+
+本机也可先测通：
+
+```powershell
+ssh autodl-crag
+```
+
+#### 5）可选：免密登录（少输密码）
+
+本机 PowerShell：
+
+```powershell
+# 若还没有密钥
+ssh-keygen -t ed25519 -N "" -f $env:USERPROFILE\.ssh\id_ed25519
+
+# 把公钥拷到服务器（-p 后换成你的端口与主机）
+type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh -p <端口> root@connect.<区域>.seetacloud.com "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"
+```
+
+config 增加一行（Windows 路径用正斜杠）：
+
+```ssh-config
+    IdentityFile C:/Users/<你的用户名>/.ssh/id_ed25519
+```
+
+#### 6）使用注意
+
+| 点 | 说明 |
+|----|------|
+| 长任务 | 训练/评估不要只靠 Remote 终端裸跑；用 `tmux` / `screen`，避免 SSH 断开就停 |
+| 落盘 | 代码与数据放 `/root/autodl-tmp` |
+| 解释器 | 远程打开后选 `.venv/bin/python` |
+| 安全 | 密码勿提交 Git、勿写入本手册正文 |
+
 ---
 
 ## 步骤 B · 安装依赖
@@ -326,6 +404,7 @@ python local_evaluation.py
 - （开机前）HF 已注册，并在模型页**接受 Llama 条款**；Token 已备好
 - （开机前）OpenAI API Key 已备好
 - AutoDL 1×24GB，Python 3.10 + CUDA；代码/数据/权重在数据盘
+- （可选）Cursor Remote-SSH 已能连上并打开 `/root/autodl-tmp/CRAG`（见 **A.1**）
 - `pip install -r requirements.txt`
 - `VLLM_TENSOR_PARALLEL_SIZE = 1`，`BATCH_SIZE = 4`
 - `example_data/dev_data.jsonl.bz2` 已就绪
@@ -349,6 +428,7 @@ python local_evaluation.py
 | HF 下载慢              | 见步骤 **B.1 / B.3**；或本机下好再上传数据盘               |
 | pip / vllm 安装慢      | 见步骤 **B.2** 换国内镜像                           |
 | 开发集很大、本机已有         | 见步骤 **D**；大文件优先网盘，Task1/2 也可用 FileZilla/scp |
+| Remote-SSH 连不上         | 实例是否开机；`~/.ssh/config` 的 HostName/Port 是否与控制台一致（重开常变端口）；见 **A.1** |
 | OpenAI 失败           | 检查 Key、余额、出网                                |
 | 关机后文件没了             | 确认写在 `/root/autodl-tmp` 等数据盘                |
 
