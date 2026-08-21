@@ -6,6 +6,32 @@ The Comprehensive RAG Benchmark (CRAG) is a rich and comprehensive factual quest
 
 本仓库迁移自 / This repository is migrated from [meta-comprehensive-rag-benchmark-kdd-cup-2024](https://gitlab.aicrowd.com/aicrowd/challenges/meta-comprehensive-rag-benchmark-kdd-cup-2024)。
 
+## 📁 仓库目录说明 / Repository Layout
+
+| 目录 / Directory | 作用 / Purpose |
+|------------------|----------------|
+| [`models/`](models/) | 参赛/基线模型实现与入口配置（`user_config.py` 选择 Vanilla / RAG / RAG-KG）；本地权重也放在此目录下约定路径。 / Participant & baseline model code and entry config (`user_config.py`); local model weights live under the expected paths here. |
+| [`mock_api/`](mock_api/) | 模拟知识图谱 / 垂直搜索 API（`server.py`、`cragkg/` 离线数据、`apiwrapper/` 客户端）。Task 2/3 与 RAG-KG 基线会用到。 / Mock KG / domain APIs (`server.py`, offline `cragkg/`, `apiwrapper/`). Used by Task 2/3 and the RAG-KG baseline. |
+| [`docs/`](docs/) | 官方说明：数据集、基线、权重下载等；本机落地步骤见 [`docs/工作记录/`](docs/工作记录/)。 / Official docs (dataset, baselines, weight download); local AutoDL runbooks under [`docs/工作记录/`](docs/工作记录/). |
+| [`prompts/`](prompts/) | 自动评估裁判用的指令与上下文示例模板。 / Judge prompts / in-context templates for auto-evaluation. |
+| [`tokenizer/`](tokenizer/) | 评估侧截断答案用的分词器资源（与生成模型分词不必完全同一套）。 / Tokenizer assets used when truncating answers for evaluation. |
+| [`utils/`](utils/) | 公共工具（如 `cragapi_wrapper.py`，封装对 Mock API 的调用）。 / Shared helpers (e.g. Mock API client wrapper). |
+| [`example_data/`](example_data/) | 小样本或指向开发集的数据入口（如 `dev_data.jsonl.bz2`）。 / Small sample / symlink entry for the eval dataset. |
+| [`data/`](data/) | 官方预留的数据目录位（大文件通常放数据盘，再链到此处或改 `DATASET_PATH`）。 / Placeholder for datasets (large files often live on a data disk; symlink or set `DATASET_PATH`). |
+| [`logs/`](logs/) | 本地跑评估时的日志输出（如 `tee` 落盘）。 / Local evaluation logs (e.g. from `tee`). |
+| [`api_responses/`](api_responses/) | 裁判 API 调用的请求/响应落盘，便于排查自动评估。 / Saved judge API request/response dumps for debugging auto-eval. |
+
+根目录关键脚本 / Key root scripts：
+
+| 文件 / File | 作用 / Purpose |
+|-------------|----------------|
+| [`local_evaluation.py`](local_evaluation.py) | 端到端：生成答案 + 自动评估（默认 GPT 裁判）。 / End-to-end generation + auto-eval (default GPT judge). |
+| [`local_evaluation_deepseek.py`](local_evaluation_deepseek.py) | 同上流水线，裁判改为 DeepSeek（如硅基流动 OpenAI 兼容接口）。 / Same pipeline with a DeepSeek-compatible judge. |
+| [`requirements.txt`](requirements.txt) | Python 依赖（含 `vllm`、`transformers` 等版本约束）。 / Python dependencies (incl. pinned `vllm` / `transformers`). |
+
+本机 AutoDL 操作请优先看 / For AutoDL single-GPU runbooks, start at：[`docs/工作记录/00-目录.md`](docs/工作记录/00-目录.md)。
+
+
 ## 📊 数据集与模拟 API / Dataset and Mock APIs
 
 关于 CRAG 数据集（下载、模式等）的更多细节，请参见 [docs/dataset.md](docs/dataset.md)；模拟 API 请参见 [mock_api](mock_api)。
