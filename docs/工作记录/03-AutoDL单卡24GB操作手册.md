@@ -135,10 +135,48 @@ config 增加一行（Windows 路径用正斜杠）：
 
 | 点 | 说明 |
 |----|------|
-| 长任务 | 训练/评估不要只靠 Remote 终端裸跑；用 `tmux` / `screen`，避免 SSH 断开就停 |
+| 长任务 | 训练/评估不要只靠 Remote 终端裸跑；用 `tmux`（见 **A.2**），避免 SSH 断开就停 |
 | 落盘 | 代码与数据放 `/root/autodl-tmp` |
 | 解释器 | 远程打开后选 `.venv/bin/python` |
 | 安全 | 密码勿提交 Git、勿写入本手册正文 |
+
+### A.2 安装 tmux（长任务防断连）
+
+Remote-SSH / SSH 断开后，裸跑的 `python local_evaluation.py` 会一起停。评估、下模型等长任务放进 **tmux**。
+
+#### 安装（本机已验证：Ubuntu / AutoDL）
+
+```bash
+apt-get update && apt-get install -y tmux
+tmux -V   # 期望类似：tmux 3.2a
+```
+
+#### 常用操作
+
+```bash
+# 新建会话（可起名）
+tmux new -s crag
+
+# 在会话里正常跑任务，例如：
+# source .venv/bin/activate
+# python local_evaluation.py
+
+# 暂时离开（任务继续跑）：先按 Ctrl+b，再按 d
+# 重新连上后附着回去：
+tmux attach -t crag
+
+# 查看会话列表
+tmux ls
+```
+
+| 操作 | 按键 / 命令 |
+|------|-------------|
+| 脱离会话（不断任务） | `Ctrl+b` 再 `d` |
+| 附着回去 | `tmux attach -t crag` |
+| 列出会话 | `tmux ls` |
+| 结束会话 | 在会话里 `exit`，或 `tmux kill-session -t crag` |
+
+建议：步骤 **E** 下权重（完整示例见 **E.1**）、步骤 **H** 跑评估，都在 tmux 里做。
 
 ---
 
@@ -330,7 +368,31 @@ mkdir -p example_data
 
 ## 步骤 E · 下载模型权重
 
-> 新版 CLI 入口是 `hf`（`huggingface-cli` 已弃用，直接调用会失败）。
+> 新版 CLI 入口是 `hf`（`huggingface-cli` 已弃用，直接调用会失败）。  
+> 下载耗时长，**建议在 tmux 里跑**（见 **A.2**），避免 SSH / Remote 断开中断。
+
+### E.1 用 tmux 启动下载（推荐）
+
+```bash
+# 1. 新建会话
+tmux new -s crag
+
+# 2. 在会话里进入项目并下载（未登录过先 hf auth login）
+cd /root/autodl-tmp/CRAG
+source .venv/bin/activate   # 若依赖已装在 venv
+
+HF_HUB_DISABLE_XET=1 hf download \
+  meta-llama/Llama-3.1-8B-Instruct \
+  --local-dir models/meta-llama/Llama-3.1-8B-Instruct \
+  --exclude "*.pth" \
+  --max-workers 2
+
+# 3. 离开会话（下载继续）：Ctrl+b，再按 d
+# 4. 回来看进度：
+# tmux attach -t crag
+```
+
+### E.2 登录与可选下载命令
 
 ```bash
 pip install -U huggingface_hub
@@ -340,10 +402,18 @@ hf auth login
 # 可选加速（替代已弃用的 HF_HUB_ENABLE_HF_TRANSFER）
 # export HF_XET_HIGH_PERFORMANCE=1
 
+# 默认写法（也可在 tmux 会话里执行）
 hf download \
     meta-llama/Llama-3.1-8B-Instruct \
     --local-dir models/meta-llama/Llama-3.1-8B-Instruct \
     --exclude "*.pth"
+
+# 下载不稳时用（关 XET、限制并发）——与 E.1 相同
+HF_HUB_DISABLE_XET=1 hf download \
+  meta-llama/Llama-3.1-8B-Instruct \
+  --local-dir models/meta-llama/Llama-3.1-8B-Instruct \
+  --exclude "*.pth" \
+  --max-workers 2
 ```
 
 三个基线中的 `self.model_name` 已指向上述本地目录。若改用其他权重，同步改路径。
@@ -398,7 +468,7 @@ Task 1 + Vanilla/RAG（只用网页检索结果）通常**不需要** Mock API�
 ```bash
 cd /root/autodl-tmp/CRAG   # 按你的实际路径
 source .venv/bin/activate
-python local_evaluation.py
+python local_evaluation_deepseek.py
 ```
 
 成功时日志会出现 `score` / `accuracy` / `hallucination` / `missing`。
@@ -411,6 +481,7 @@ python local_evaluation.py
 - （开机前）OpenAI API Key 已备好
 - AutoDL 1×24GB，Python 3.10 + CUDA；代码/数据/权重在数据盘
 - （可选）Cursor Remote-SSH 已能连上并打开 `/root/autodl-tmp/CRAG`（见 **A.1**）
+- （推荐）已装 `tmux`；长任务在会话里跑（见 **A.2**）
 - `pip install -r requirements.txt`
 - `VLLM_TENSOR_PARALLEL_SIZE = 1`，`BATCH_SIZE = 4`
 - `example_data/dev_data.jsonl.bz2` 已就绪
@@ -436,6 +507,7 @@ python local_evaluation.py
 | pip / vllm 安装慢      | 见步骤 **B.2** 换国内镜像                           |
 | 开发集很大、本机已有         | 见步骤 **D**；大文件优先网盘，Task1/2 也可用 FileZilla/scp |
 | Remote-SSH 连不上         | 实例是否开机；`~/.ssh/config` 的 HostName/Port 是否与控制台一致（重开常变端口）；见 **A.1** |
+| SSH 一断评估就停         | 用 **A.2** 的 tmux 跑长任务；`tmux ls` 看会话是否还在 |
 | OpenAI 失败           | 检查 Key、余额、出网                                |
 | 关机后文件没了             | 确认写在 `/root/autodl-tmp` 等数据盘                |
 
