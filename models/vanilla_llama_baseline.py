@@ -34,10 +34,10 @@ CRAG_MOCK_API_URL = os.getenv("CRAG_MOCK_API_URL", "http://localhost:8000")
 #### CONFIG PARAMETERS ---
 
 # Batch size you wish the evaluators will use to call the `batch_generate_answer` function
-BATCH_SIZE = 8 # TUNE THIS VARIABLE depending on the number of GPUs you are requesting and the size of your model.
+BATCH_SIZE = 4 # TUNE THIS VARIABLE depending on the number of GPUs you are requesting and the size of your model.
 
 # VLLM Parameters 
-VLLM_TENSOR_PARALLEL_SIZE = 4 # TUNE THIS VARIABLE depending on the number of GPUs you are requesting and the size of your model.
+VLLM_TENSOR_PARALLEL_SIZE = 1 # TUNE THIS VARIABLE depending on the number of GPUs you are requesting and the size of your model.
 VLLM_GPU_MEMORY_UTILIZATION = 0.85 # TUNE THIS VARIABLE depending on the number of GPUs you are requesting and the size of your model.
 
 #### CONFIG PARAMETERS END---
@@ -53,7 +53,7 @@ class InstructModel:
 
     def initialize_models(self):
         # Initialize Meta Llama 3 - 8B Instruct Model
-        self.model_name = "models/meta-llama/Meta-Llama-3-8B-Instruct"
+        self.model_name = "models/meta-llama/Llama-3.1-8B-Instruct"
 
         if not os.path.exists(self.model_name):
             raise Exception(

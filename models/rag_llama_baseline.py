@@ -45,10 +45,10 @@ MAX_CONTEXT_SENTENCE_LENGTH = 1000
 MAX_CONTEXT_REFERENCES_LENGTH = 4000
 
 # Batch size you wish the evaluators will use to call the `batch_generate_answer` function
-SUBMISSION_BATCH_SIZE = 8 # TUNE THIS VARIABLE depending on the number of GPUs you are requesting and the size of your model.
+SUBMISSION_BATCH_SIZE = 4 # TUNE THIS VARIABLE depending on the number of GPUs you are requesting and the size of your model.
 
 # VLLM Parameters 
-VLLM_TENSOR_PARALLEL_SIZE = 4 # TUNE THIS VARIABLE depending on the number of GPUs you are requesting and the size of your model.
+VLLM_TENSOR_PARALLEL_SIZE = 1 # TUNE THIS VARIABLE depending on the number of GPUs you are requesting and the size of your model.
 VLLM_GPU_MEMORY_UTILIZATION = 0.85 # TUNE THIS VARIABLE depending on the number of GPUs you are requesting and the size of your model.
 
 # Sentence Transformer Parameters
@@ -166,7 +166,7 @@ class RAGModel:
 
     def initialize_models(self):
         # Initialize Meta Llama 3 - 8B Instruct Model
-        self.model_name = "models/meta-llama/Meta-Llama-3-8B-Instruct"
+        self.model_name = "models/meta-llama/Llama-3.1-8B-Instruct"
 
         if not os.path.exists(self.model_name):
             raise Exception(

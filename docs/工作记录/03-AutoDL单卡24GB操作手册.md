@@ -1,8 +1,9 @@
 # 03 · AutoDL 单卡 24GB 操作手册（主文档）
 
-> 整理日期：2026-08-20  
+> 整理日期：2026-08-21  
 > **用途**：在 AutoDL 上跑通 CRAG。按本文从上到下做即可，一般**不必**再翻 01/02。  
-> 卡型：1 × 24GB（推荐 **RTX 4090**）
+> 卡型：1 × 24GB（推荐 **RTX 4090**）  
+> **生成模型**：本环境默认使用已获权的 `meta-llama/Llama-3.1-8B-Instruct`（官方示例为 `Meta-Llama-3-8B-Instruct`，二者同为门控，需分别在模型页申请）。
 
 ---
 
@@ -18,12 +19,12 @@
 | AutoDL              | 账号有余额；能租 **1×24GB**（推荐 RTX 4090）；镜像含 **CUDA + Python 3.10**                                                          | 算力                                 |
 | 数据盘                 | ≥ **50GB**（建议 80GB+）                                                                                                 | 仓库 + 权重 + 数据集                      |
 | **Hugging Face 账号** | [注册](https://huggingface.co/join)                                                                                    | 下载 Llama 权重必需                      |
-| **接受 Llama 条款**     | 打开 [Meta-Llama-3-8B-Instruct](https://huggingface.co/meta-llama/Meta-Llama-3-8B-Instruct)，点击同意使用条款（可能需等待审核）          | **只注册不点条款会下不了**                    |
-| **HF Access Token** | [Settings → Access Tokens](https://huggingface.co/settings/tokens) 新建（Read 即可），本地 `huggingface-cli login` 粘贴，**勿写入仓库** | 供 `huggingface-cli login`          |
+| **接受 Llama 条款**     | 打开 [Llama-3.1-8B-Instruct](https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct)，同意分享联系方式并接受 License（可能需等待审核） | **只注册不点条款会下不了**；3 与 3.1 需**分别**申请 |
+| **HF Access Token** | [Settings → Access Tokens](https://huggingface.co/settings/tokens) 新建（Read 即可），本地 `hf auth login` 粘贴，**勿写入仓库** | 供 `hf auth login`（旧版 `huggingface-cli` 已弃用） |
 | **OpenAI API Key**  | 有额度、能调用 GPT                                                                                                          | `local_evaluation.py` 默认用 GPT-4 打分 |
 
 
-HF 顺序固定：**网页接受条款 → `huggingface-cli login` → 再 download**。
+HF 顺序固定：**网页接受条款 → `hf auth login` → 再 `hf download`**。
 
 ### 按你要跑的内容再加
 
@@ -212,7 +213,7 @@ pip config set global.trusted-host mirrors.aliyun.com
 export HF_ENDPOINT=https://hf-mirror.com
 ```
 
-然后按步骤 E 正常 `huggingface-cli download ...`。
+然后按步骤 E 正常 `hf download ...`。
 
 
 | 场景                       | 优先做法                                 |
@@ -329,24 +330,29 @@ mkdir -p example_data
 
 ## 步骤 E · 下载模型权重
 
+> 新版 CLI 入口是 `hf`（`huggingface-cli` 已弃用，直接调用会失败）。
+
 ```bash
-pip install "huggingface_hub[hf_transfer]"
-huggingface-cli login
+pip install -U huggingface_hub
+hf auth login
 # 粘贴 HF Token
 
-HF_HUB_ENABLE_HF_TRANSFER=1 huggingface-cli download \
-    meta-llama/Meta-Llama-3-8B-Instruct \
-    --local-dir-use-symlinks False \
-    --local-dir models/meta-llama/Meta-Llama-3-8B-Instruct \
+# 可选加速（替代已弃用的 HF_HUB_ENABLE_HF_TRANSFER）
+# export HF_XET_HIGH_PERFORMANCE=1
+
+hf download \
+    meta-llama/Llama-3.1-8B-Instruct \
+    --local-dir models/meta-llama/Llama-3.1-8B-Instruct \
     --exclude "*.pth"
 ```
+
+三个基线中的 `self.model_name` 已指向上述本地目录。若改用其他权重，同步改路径。
 
 仅当跑 RAG / RAG-KG 时再下：
 
 ```bash
-HF_HUB_ENABLE_HF_TRANSFER=1 huggingface-cli download \
+hf download \
     sentence-transformers/all-MiniLM-L6-v2 \
-    --local-dir-use-symlinks False \
     --local-dir models/sentence-transformers/all-MiniLM-L6-v2 \
     --exclude "*.bin" "*.h5" "*.ot"
 ```
@@ -408,7 +414,7 @@ python local_evaluation.py
 - `pip install -r requirements.txt`
 - `VLLM_TENSOR_PARALLEL_SIZE = 1`，`BATCH_SIZE = 4`
 - `example_data/dev_data.jsonl.bz2` 已就绪
-- `huggingface-cli login` 并下载 Llama 3 8B
+- `hf auth login` 并 `hf download` Llama-3.1-8B-Instruct
 - `OPENAI_API_KEY` 已设置
 - `user_config.py` 指向目标模型
 - `python local_evaluation.py`
@@ -421,7 +427,8 @@ python local_evaluation.py
 
 | 现象                  | 处理                                          |
 | ------------------- | ------------------------------------------- |
-| HF 401 / 无法下载 Llama | 见文首**开机前清单**：先在网页接受条款，再 login；Token 权限要够    |
+| HF 401 / 无法下载 Llama | 见文首**开机前清单**：在 **Llama-3.1** 模型页接受条款并等通过，再 `hf auth login`；Token 与网页须为同一账号 |
+| 条款被拒（rejected）     | 换账号或补全联系信息后重新申请；本手册已改用已通过的 `Llama-3.1-8B-Instruct` |
 | 多卡/并行相关报错           | 确认 `VLLM_TENSOR_PARALLEL_SIZE=1`            |
 | CUDA OOM            | `BATCH_SIZE=1`，`gpu_memory_utilization=0.7` |
 | 找不到数据/权重            | 检查路径是否在仓库内相对路径正确                            |
