@@ -7,7 +7,7 @@ huggingface-hub
 loguru
 lxml
 openai>=1.40.0
-sentence_transformers
+sentence_transformers==3.3.1
 torch
-transformers
+transformers==4.45.2
 vllm==0.6.3

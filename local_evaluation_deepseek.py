@@ -9,24 +9,30 @@
 """
 Usage (SiliconFlow example):
 
-  export SILICONFLOW_API_KEY=sk-...
-  # optional:
+  # Put keys in project-root .env (see .env), then:
+  python local_evaluation_deepseek.py
+
+  # Or export manually:
+  # export SILICONFLOW_API_KEY=sk-...
   # export OPENAI_BASE_URL=https://api.siliconflow.cn/v1
   # export EVALUATION_MODEL_NAME=deepseek-ai/DeepSeek-V3.2
-
-  python local_evaluation_deepseek.py
 
 Same generation pipeline as local_evaluation.py; only the judge client/model differs.
 """
 
 import os
 
-from local_evaluation import evaluate_predictions, generate_predictions
+from local_evaluation import (
+    evaluate_predictions,
+    generate_predictions,
+    load_dotenv,
+)
 
 
 if __name__ == "__main__":
     from models.user_config import UserModel
 
+    load_dotenv()
     # 全量 Task1/2 开发集（已下载目录）；冒烟可改回 example_data/dev_data.jsonl.bz2
     DATASET_PATH = os.getenv(
         "DATASET_PATH",

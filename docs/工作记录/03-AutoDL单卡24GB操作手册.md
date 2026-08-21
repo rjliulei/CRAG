@@ -159,7 +159,7 @@ tmux new -s crag
 
 # 在会话里正常跑任务，例如：
 # source .venv/bin/activate
-# python local_evaluation.py
+# python local_evaluation_deepseek.py   # 完整命令见步骤 H
 
 # 暂时离开（任务继续跑）：先按 Ctrl+b，再按 d
 # 重新连上后附着回去：
@@ -276,7 +276,10 @@ export HF_ENDPOINT=https://hf-mirror.com
 BATCH_SIZE = 4                      # 或 SUBMISSION_BATCH_SIZE = 4
 VLLM_TENSOR_PARALLEL_SIZE = 1       # 单卡必须是 1（默认 4，不改会挂）
 VLLM_GPU_MEMORY_UTILIZATION = 0.85  # OOM 再改成 0.7
+VLLM_MAX_MODEL_LEN = 8192           # Llama-3.1 默认 131072，单卡 24GB KV 装不下
 ```
+
+并在 `vllm.LLM(...)` 里传入 `max_model_len=VLLM_MAX_MODEL_LEN`（仓库基线已按此改好）。
 
 若启动报 Ray 相关错误，把同文件里 `worker_use_ray=True` 改成 `False`。
 
@@ -439,9 +442,24 @@ from models.vanilla_llama_baseline import InstructModel
 UserModel = InstructModel
 ```
 
+跑通 Vanilla 后，要跑 **RAG / RAG-KG** 时：改 `user_config.py`、下 MiniLM、（KG 时）起 Mock API——见独立手册  
+**[05-RAG与RAG-KG基线操作手册.md](./05-RAG与RAG-KG基线操作手册.md)**（勿与 Vanilla 评测抢同一张 GPU）。
+
 ---
 
 ## 步骤 G · 环境变量
+
+推荐把密钥写在项目根目录 **`.env`**（勿提交 Git）。`local_evaluation.py` / `local_evaluation_deepseek.py` 会自动加载，无需再 `export`：
+
+```bash
+# .env 示例（DeepSeek 裁判走硅基流动）
+SILICONFLOW_API_KEY=sk-你的密钥
+SILICONFLOW_BASE_URL=https://api.siliconflow.cn/v1
+OPENAI_BASE_URL=https://api.siliconflow.cn/v1
+EVALUATION_MODEL_NAME=deepseek-ai/DeepSeek-V3.2
+```
+
+若仍用官方 OpenAI GPT 裁判：
 
 ```bash
 export OPENAI_API_KEY=sk-你的密钥
@@ -463,32 +481,76 @@ Task 1 + Vanilla/RAG（只用网页检索结果）通常**不需要** Mock API�
 
 ---
 
-## 步骤 H · 运行
+## 步骤 H · 用 tmux 运行评估（推荐）
+
+全量预测 + 裁判打分可能跑很久，**务必在 tmux 里跑**，避免 SSH / Cursor Remote 断开导致进程被杀。
+
+### H.1 新建会话并启动（DeepSeek 裁判）
 
 ```bash
 cd /root/autodl-tmp/CRAG   # 按你的实际路径
+tmux new -s crag
+
+# ---- 以下均在 tmux 会话内执行 ----
 source .venv/bin/activate
-python local_evaluation_deepseek.py
+unset OMP_NUM_THREADS          # AutoDL 有时设成 0，会触发 libgomp 警告
+mkdir -p logs
+python local_evaluation_deepseek.py 2>&1 | tee logs/eval_deepseek_$(date +%Y%m%d_%H%M%S).log
 ```
 
-成功时日志会出现 `score` / `accuracy` / `hallucination` / `missing`。
+说明：
+
+- Key / `EVALUATION_MODEL_NAME` 从项目根 `.env` 自动读取（见步骤 **G**）
+- `tee` 同时打屏并落盘，便于 detach 后再查日志
+- 官方 GPT 裁判则把命令换成：`python local_evaluation.py`
+
+### H.2 脱离与回看
+
+```bash
+# 任务继续跑，只离开会话：Ctrl+b，再按 d
+
+# 重新附着
+tmux attach -t crag
+
+# 不 attach 也能看日志（另开终端）
+tmux ls
+tail -f logs/eval_deepseek_*.log
+```
+
+### H.3 后台一键启动（可选，不进入交互界面）
+
+适合已经装好依赖、只想丢任务：
+
+```bash
+cd /root/autodl-tmp/CRAG
+source .venv/bin/activate
+mkdir -p logs
+LOG=logs/eval_deepseek_$(date +%Y%m%d_%H%M%S).log
+tmux new-session -d -s crag \
+  "source .venv/bin/activate && unset OMP_NUM_THREADS && python local_evaluation_deepseek.py 2>&1 | tee $LOG"
+echo "log -> $LOG"
+tmux ls
+```
+
+成功结束时日志会出现 `score` / `accuracy` / `hallucination` / `missing`。
+
+结束会话：在会话里 `exit`，或 `tmux kill-session -t crag`。
 
 ---
 
 ## Checklist（打勾即可）
 
 - （开机前）HF 已注册，并在模型页**接受 Llama 条款**；Token 已备好
-- （开机前）OpenAI API Key 已备好
+- （开机前）裁判 API Key 已备好（`.env` 里 `SILICONFLOW_API_KEY`，或 OpenAI Key）
 - AutoDL 1×24GB，Python 3.10 + CUDA；代码/数据/权重在数据盘
 - （可选）Cursor Remote-SSH 已能连上并打开 `/root/autodl-tmp/CRAG`（见 **A.1**）
-- （推荐）已装 `tmux`；长任务在会话里跑（见 **A.2**）
-- `pip install -r requirements.txt`
-- `VLLM_TENSOR_PARALLEL_SIZE = 1`，`BATCH_SIZE = 4`
-- `example_data/dev_data.jsonl.bz2` 已就绪
+- 已装 `tmux`；评估在会话里跑（见 **A.2** / **H**）
+- `pip install -r requirements.txt`（`transformers==4.45.2`，勿升到 5.x）
+- `VLLM_TENSOR_PARALLEL_SIZE = 1`，`BATCH_SIZE = 4`，`VLLM_MAX_MODEL_LEN = 8192`
+- `example_data/dev_data.jsonl.bz2` 或 `DATASET_PATH` 已就绪
 - `hf auth login` 并 `hf download` Llama-3.1-8B-Instruct
-- `OPENAI_API_KEY` 已设置
 - `user_config.py` 指向目标模型
-- `python local_evaluation.py`
+- `tmux` 内执行 `python local_evaluation_deepseek.py`（或 `local_evaluation.py`）
 - 不用时关机，避免空转计费
 
 ---
@@ -502,13 +564,16 @@ python local_evaluation_deepseek.py
 | 条款被拒（rejected）     | 换账号或补全联系信息后重新申请；本手册已改用已通过的 `Llama-3.1-8B-Instruct` |
 | 多卡/并行相关报错           | 确认 `VLLM_TENSOR_PARALLEL_SIZE=1`            |
 | CUDA OOM            | `BATCH_SIZE=1`，`gpu_memory_utilization=0.7` |
+| `max seq len (131072) ... KV cache` | 设 `VLLM_MAX_MODEL_LEN=8192`（见步骤 **C**） |
+| `all_special_tokens_extended` / transformers 与 vllm 冲突 | 固定 `transformers==4.45.2`，勿装 5.x |
+| DeepSeek judge requires API_KEY | 检查项目根 `.env` 的 `SILICONFLOW_API_KEY`；代码应自动 `load_dotenv` |
 | 找不到数据/权重            | 检查路径是否在仓库内相对路径正确                            |
 | HF 下载慢              | 见步骤 **B.1 / B.3**；或本机下好再上传数据盘               |
 | pip / vllm 安装慢      | 见步骤 **B.2** 换国内镜像                           |
 | 开发集很大、本机已有         | 见步骤 **D**；大文件优先网盘，Task1/2 也可用 FileZilla/scp |
 | Remote-SSH 连不上         | 实例是否开机；`~/.ssh/config` 的 HostName/Port 是否与控制台一致（重开常变端口）；见 **A.1** |
-| SSH 一断评估就停         | 用 **A.2** 的 tmux 跑长任务；`tmux ls` 看会话是否还在 |
-| OpenAI 失败           | 检查 Key、余额、出网                                |
+| SSH 一断评估就停         | 用 **A.2 / H** 的 tmux 跑；`tmux ls` 看会话是否还在 |
+| OpenAI / 硅基流动失败           | 检查 Key、余额、出网、`OPENAI_BASE_URL`                                |
 | 关机后文件没了             | 确认写在 `/root/autodl-tmp` 等数据盘                |
 
 

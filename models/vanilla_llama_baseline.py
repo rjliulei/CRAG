@@ -39,6 +39,8 @@ BATCH_SIZE = 4 # TUNE THIS VARIABLE depending on the number of GPUs you are requ
 # VLLM Parameters 
 VLLM_TENSOR_PARALLEL_SIZE = 1 # TUNE THIS VARIABLE depending on the number of GPUs you are requesting and the size of your model.
 VLLM_GPU_MEMORY_UTILIZATION = 0.85 # TUNE THIS VARIABLE depending on the number of GPUs you are requesting and the size of your model.
+# Llama-3.1 defaults to 131072; single 24GB card KV cache is ~30k — cap context for vLLM.
+VLLM_MAX_MODEL_LEN = 8192
 
 #### CONFIG PARAMETERS END---
 
@@ -68,7 +70,8 @@ class InstructModel:
             self.model_name,
             worker_use_ray=True,
             tensor_parallel_size=VLLM_TENSOR_PARALLEL_SIZE, 
-            gpu_memory_utilization=VLLM_GPU_MEMORY_UTILIZATION, 
+            gpu_memory_utilization=VLLM_GPU_MEMORY_UTILIZATION,
+            max_model_len=VLLM_MAX_MODEL_LEN,
             trust_remote_code=True,
             dtype="half", # note: update the dtype based on the available GPU
             enforce_eager=True

@@ -18,6 +18,25 @@ from transformers import LlamaTokenizerFast
 
 tokenizer = LlamaTokenizerFast.from_pretrained("tokenizer")
 
+_ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+
+
+def load_dotenv(dotenv_path: str | None = None) -> None:
+    """Load KEY=VALUE from .env into os.environ (does not override existing vars)."""
+    path = dotenv_path or _ENV_PATH
+    if not os.path.isfile(path):
+        return
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip().strip("'").strip('"')
+            if key and key not in os.environ:
+                os.environ[key] = value
+
 
 def load_json_file(file_path):
     """Load and return the content of a JSON file."""
@@ -44,7 +63,9 @@ def build_evaluation_client(evaluation_model_name: str) -> OpenAI:
 
     - Default OpenAI GPT path: unchanged (api.openai.com + OPENAI_API_KEY).
     - deepseek-ai/* (e.g. DeepSeek-V3.2 on SiliconFlow): OpenAI-compatible base_url.
+    Keys/base_url may come from the project-root .env file.
     """
+    load_dotenv()
     name = evaluation_model_name.lower()
     if "deepseek" in name:
         api_key = (
@@ -332,6 +353,7 @@ def evaluate_predictions(queries, ground_truths_list, predictions, evaluation_mo
 if __name__ == "__main__":
     from models.user_config import UserModel
 
+    load_dotenv()
     # 全量 Task1/2 开发集（已下载目录）；冒烟可改回 example_data/dev_data.jsonl.bz2
     DATASET_PATH = os.getenv(
         "DATASET_PATH",
