@@ -332,7 +332,11 @@ def evaluate_predictions(queries, ground_truths_list, predictions, evaluation_mo
 if __name__ == "__main__":
     from models.user_config import UserModel
 
-    DATASET_PATH = "example_data/dev_data.jsonl.bz2"
+    # 全量 Task1/2 开发集（已下载目录）；冒烟可改回 example_data/dev_data.jsonl.bz2
+    DATASET_PATH = os.getenv(
+        "DATASET_PATH",
+        "/root/autodl-tmp/20260820-crag/crag_task_1_and_2_dev_v5.jsonl.bz2",
+    )
     EVALUATION_MODEL_NAME = os.getenv("EVALUATION_MODEL_NAME", "gpt-4-0125-preview")
 
     # Generate predictions
