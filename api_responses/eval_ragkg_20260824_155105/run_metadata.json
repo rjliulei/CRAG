@@ -1,0 +1,15 @@
+{
+  "migrated_at": "2026-08-24T16:13:21",
+  "log_file": "logs/eval_ragkg_20260824_155105.log",
+  "participant_model": "RAG_KG_Model",
+  "evaluation_model": "deepseek-ai/DeepSeek-V3.2",
+  "dataset_path": "example_data/dev_subset_100_random.jsonl.bz2",
+  "note": "RAG-KG 随机 100 条；由根目录 api_responses 历史文件迁移",
+  "results": {
+    "total": 100,
+    "score": -0.05,
+    "accuracy": 0.2,
+    "missing": 0.55,
+    "hallucination": 0.25
+  }
+}

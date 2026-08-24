@@ -43,9 +43,15 @@ if __name__ == "__main__":
     )
 
     participant_model = UserModel()
+    participant_model_name = type(participant_model).__name__
     queries, ground_truths, predictions = generate_predictions(
         DATASET_PATH, participant_model
     )
     evaluation_results = evaluate_predictions(
-        queries, ground_truths, predictions, EVALUATION_MODEL_NAME
+        queries,
+        ground_truths,
+        predictions,
+        EVALUATION_MODEL_NAME,
+        dataset_path=DATASET_PATH,
+        participant_model_name=participant_model_name,
     )

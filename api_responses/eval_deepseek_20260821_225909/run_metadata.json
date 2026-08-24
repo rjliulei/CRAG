@@ -1,0 +1,15 @@
+{
+  "migrated_at": "2026-08-24T16:13:21",
+  "log_file": "logs/eval_deepseek_20260821_225909.log",
+  "participant_model": "InstructModel",
+  "evaluation_model": "deepseek-ai/DeepSeek-V3.2",
+  "dataset_path": "/root/autodl-tmp/20260820-crag/crag_task_1_and_2_dev_v5.jsonl.bz2",
+  "note": "Vanilla 全量 2706 条；由根目录 api_responses 历史文件迁移",
+  "results": {
+    "total": 2706,
+    "score": -0.0018477457501847594,
+    "accuracy": 0.15779748706577976,
+    "missing": 0.6825572801182558,
+    "hallucination": 0.15964523281596452
+  }
+}
