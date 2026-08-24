@@ -44,6 +44,9 @@ ls models/meta-llama/Llama-3.1-8B-Instruct/*.safetensors | wc -l
 ```bash
 cd /root/autodl-tmp/CRAG
 source .venv/bin/activate
+source /etc/network_turbo  打开加速
+export HF_HUB_DISABLE_XET=1  关闭认证
+# export HF_ENDPOINT=https://hf-mirror.com
 
 # 可选加速：export HF_ENDPOINT=https://hf-mirror.com
 hf download \
