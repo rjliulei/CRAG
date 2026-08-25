@@ -1,0 +1,47 @@
+﻿n=110
+labels: {'过度检索': 25, '缺证据': 22, '生成错': 38, '检索有效': 10, '过早停': 6, '合理拒答': 9}
+bucket x label:
+  both_hallucination           缺证据      16
+  both_hallucination           生成错      14
+  both_missing                 合理拒答     9
+  both_missing                 过早停      1
+  rag_hallucination            生成错      24
+  rag_hallucination            缺证据      6
+  rag_helps                    检索有效     10
+  rag_missing                  过早停      5
+  rag_worse_hallucination      过度检索     25
+wrote example_data\error_analysis_phaseB_labeled_heuristic_20260825.json
+
+== samples ==
+--- rag_worse_hallucination 过度检索 set movie
+Q: what pixar films were released after 2017?
+P: Toy Story 4 (2019), Onward (2020), Soul (2020), Luca (2021), Turning Red (2022), Lightyear (2022), and Elemental (2023).
+note: Vanilla对RAG幻觉
+--- rag_worse_hallucination 过度检索 simple_w_condition movie
+Q: what color was mr. incredibles suit at the beginning of the first incredibles movie?
+P: Black and sky blue.
+note: Vanilla对RAG幻觉
+--- both_hallucination 缺证据 set music
+Q: who were the members of the band green day?
+P: Billie Joe Armstrong, Mike Dirnt, Tré Cool, Jason White, Kevin Preston, Jason Freese, John Kiffmeyer, Raj Punjabi, Sean 
+note: 幻觉默认(启发式-待精标)
+--- both_hallucination 生成错 aggregation sports
+Q: what is the total number of world cup victories for the brazilian national football (soccer) team?
+P: 5
+note: 短答错误(启发式)
+--- rag_hallucination 生成错 simple movie
+Q: wt what time did the assassination of jesse james by the coward robert ford first premiere in theaters?
+P: September 2, 2007.
+note: 短答错误(启发式)
+--- rag_hallucination 生成错 post-processing finance
+Q: how much is tesla's stock price down from its all-time high?
+P: $229.23 ($409.97 - $180.74)
+note: 短答错误(启发式)
+--- rag_helps 检索有效 false_premise sports
+Q: how many times has sunisa lee won the olympic all-around individual title?
+P: 1
+note: RAG救回
+--- rag_helps 检索有效 set music
+Q: who are the current members of the band linkin park?
+P: Mike Shinoda, Rob Bourdon, Dave Farrell, Brad Delson, and Joe Hahn.
+note: RAG救回
