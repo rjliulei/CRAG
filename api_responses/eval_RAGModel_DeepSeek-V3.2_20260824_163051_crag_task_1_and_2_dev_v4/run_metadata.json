@@ -1,0 +1,7 @@
+{
+  "started_at": "2026-08-24T16:30:51",
+  "evaluation_model": "deepseek-ai/DeepSeek-V3.2",
+  "participant_model": "RAGModel",
+  "dataset_path": "/root/autodl-tmp/20260820-crag/crag_task_1_and_2_dev_v4.jsonl.bz2",
+  "experiment_name": null
+}
