@@ -1,0 +1,7 @@
+{
+  "started_at": "2026-08-28T00:23:07",
+  "evaluation_model": "deepseek-ai/DeepSeek-V3.2",
+  "participant_model": "RAGModel",
+  "dataset_path": "example_data/dev_subset_200_typical_20260825_222321.jsonl.bz2",
+  "experiment_name": null
+}

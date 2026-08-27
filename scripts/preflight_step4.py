@@ -11,6 +11,19 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SUBSET = os.path.join(
     REPO, "example_data", "dev_subset_200_typical_20260825_222321.jsonl.bz2"
 )
+LFS_PREFIX = "version https://git-lfs.github.com/spec/v1"
+
+
+def is_lfs_pointer(path: str) -> bool:
+    if not os.path.isfile(path) or os.path.getsize(path) > 512:
+        return False
+    with open(path, encoding="utf-8", errors="ignore") as f:
+        return f.read(64).startswith(LFS_PREFIX)
+
+
+def count_bz2_lines(path: str) -> int:
+    with bz2.open(path, "rt", encoding="utf-8") as f:
+        return sum(1 for _ in f)
 
 
 def main() -> int:
@@ -20,9 +33,18 @@ def main() -> int:
     if not os.path.isfile(SUBSET):
         print(f"FAIL: subset missing: {SUBSET}")
         ok = False
+    elif is_lfs_pointer(SUBSET):
+        print(f"FAIL: subset is Git LFS pointer (not real bz2): {SUBSET}")
+        print("  fix: python scripts/rebuild_subset_from_manifest.py")
+        ok = False
     else:
-        n = sum(1 for _ in bz2.open(SUBSET, "rt"))
-        print(f"OK: subset exists, n={n}")
+        try:
+            n = count_bz2_lines(SUBSET)
+            print(f"OK: subset exists, n={n}")
+        except OSError as e:
+            print(f"FAIL: cannot read subset bz2: {e}")
+            print("  fix: python scripts/rebuild_subset_from_manifest.py")
+            ok = False
 
     user_cfg = os.path.join(REPO, "models", "user_config.py")
     with open(user_cfg, encoding="utf-8") as f:

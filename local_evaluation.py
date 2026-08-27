@@ -442,9 +442,8 @@ def evaluate_predictions(
 
 
 if __name__ == "__main__":
-    from models.user_config import UserModel
-
     load_dotenv()
+    from models.user_config import UserModel
     # 全量 Task1/2 开发集（已下载目录）；冒烟可改回 example_data/dev_data.jsonl.bz2
     DATASET_PATH = os.getenv(
         "DATASET_PATH",
