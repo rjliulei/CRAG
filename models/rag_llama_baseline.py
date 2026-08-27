@@ -56,6 +56,11 @@ VLLM_MAX_MODEL_LEN = 8192
 # Sentence Transformer Parameters
 SENTENTENCE_TRANSFORMER_BATCH_SIZE = 128 # TUNE THIS VARIABLE depending on the size of your embedding model and GPU mem available
 
+# Step 4: abstain when max retrieval cosine score is below threshold (see batch_generate_answer)
+RAG_ABSTAIN_ENABLED = os.getenv("RAG_ABSTAIN_ENABLED", "0") == "1"
+RAG_ABSTAIN_MIN_MAX_SCORE = float(os.getenv("RAG_ABSTAIN_MIN_MAX_SCORE", "0.40"))
+RAG_ABSTAIN_RESPONSE = os.getenv("RAG_ABSTAIN_RESPONSE", "I don't know")
+
 #### CONFIG PARAMETERS END---
 
 class ChunkExtractor:
@@ -280,9 +285,8 @@ class RAGModel:
 
         # Retrieve top matches for the whole batch
         batch_retrieval_results = []
+        abstain_flags = []
         for _idx, interaction_id in enumerate(batch_interaction_ids):
-            query = queries[_idx]
-            query_time = query_times[_idx]
             query_embedding = query_embeddings[_idx]
 
             # Identify chunks that belong to this interaction_id
@@ -295,42 +299,58 @@ class RAGModel:
             # Calculate cosine similarity between query and chunk embeddings,
             cosine_scores = (relevant_chunks_embeddings * query_embedding).sum(1)
 
+            max_score = float(cosine_scores.max()) if len(cosine_scores) else 0.0
+            if RAG_ABSTAIN_ENABLED and max_score < RAG_ABSTAIN_MIN_MAX_SCORE:
+                batch_retrieval_results.append([])
+                abstain_flags.append(True)
+                continue
+
             # and retrieve top-N results.
             retrieval_results = relevant_chunks[
                 (-cosine_scores).argsort()[:NUM_CONTEXT_SENTENCES]
             ]
-            
-            # You might also choose to skip the steps above and 
+
+            # You might also choose to skip the steps above and
             # use a vectorDB directly.
             batch_retrieval_results.append(retrieval_results)
-            
-        # Prepare formatted prompts from the LLM        
-        formatted_prompts = self.format_prompts(queries, query_times, batch_retrieval_results)
+            abstain_flags.append(False)
 
-        # Generate responses via vllm
-        responses = self.llm.generate(
-            formatted_prompts,
-            vllm.SamplingParams(
-                n=1,  # Number of output sequences to return for each prompt.
-                top_p=0.9,  # Float that controls the cumulative probability of the top tokens to consider.
-                temperature=0.1,  # Randomness of the sampling
-                skip_special_tokens=True,  # Whether to skip special tokens in the output.
-                max_tokens=50,  # Maximum number of tokens to generate per output sequence.
-                
-                # Note: We are using 50 max new tokens instead of 75,
-                # because the 75 max token limit for the competition is checked using the Llama2 tokenizer.
-                # Llama3 instead uses a different tokenizer with a larger vocabulary
-                # This allows the Llama3 tokenizer to represent the same content more efficiently, 
-                # while using fewer tokens.
-            ),
-            use_tqdm=False # you might consider setting this to True during local development
-        )
+        generate_indices = [idx for idx, abstain in enumerate(abstain_flags) if not abstain]
+        if generate_indices:
+            formatted_prompts = self.format_prompts(
+                [queries[idx] for idx in generate_indices],
+                [query_times[idx] for idx in generate_indices],
+                [batch_retrieval_results[idx] for idx in generate_indices],
+            )
+            responses = self.llm.generate(
+                formatted_prompts,
+                vllm.SamplingParams(
+                    n=1,  # Number of output sequences to return for each prompt.
+                    top_p=0.9,  # Float that controls the cumulative probability of the top tokens to consider.
+                    temperature=0.1,  # Randomness of the sampling
+                    skip_special_tokens=True,  # Whether to skip special tokens in the output.
+                    max_tokens=50,  # Maximum number of tokens to generate per output sequence.
 
-        # Aggregate answers into List[str]
+                    # Note: We are using 50 max new tokens instead of 75,
+                    # because the 75 max token limit for the competition is checked using the Llama2 tokenizer.
+                    # Llama3 instead uses a different tokenizer with a larger vocabulary
+                    # This allows the Llama3 tokenizer to represent the same content more efficiently,
+                    # while using fewer tokens.
+                ),
+                use_tqdm=False # you might consider setting this to True during local development
+            )
+        else:
+            responses = []
+
         answers = []
-        for response in responses:
-            answers.append(response.outputs[0].text)
-        
+        response_idx = 0
+        for abstain in abstain_flags:
+            if abstain:
+                answers.append(RAG_ABSTAIN_RESPONSE)
+            else:
+                answers.append(responses[response_idx].outputs[0].text)
+                response_idx += 1
+
         return answers
 
     def format_prompts(self, queries, query_times, batch_retrieval_results=[]):
