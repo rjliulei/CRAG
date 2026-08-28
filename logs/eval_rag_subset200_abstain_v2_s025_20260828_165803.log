@@ -1,0 +1,37 @@
+You are using the default legacy behaviour of the <class 'transformers.models.llama.tokenization_llama_fast.LlamaTokenizerFast'>. This is expected, and simply means that the `legacy` (previous) behavior will be used so nothing changes for you. If you want to use the new behaviour, set `legacy=False`. This should only be set if you understand what it means, and thoroughly read the reason why this was added as explained in https://github.com/huggingface/transformers/pull/24565 - if you loaded a llama tokenizer from a GGUF file you can ignore this message.
+/root/autodl-tmp/CRAG/.venv/lib/python3.10/site-packages/vllm/connections.py:8: RuntimeWarning: Failed to read commit hash:
+No module named 'vllm._version'
+  from vllm.version import __version__ as VLLM_VERSION
+WARNING 08-28 16:58:08 config.py:1674] Casting torch.bfloat16 to torch.float16.
+WARNING 08-28 16:58:13 config.py:380] To see benefits of async output processing, enable CUDA graph. Since, enforce-eager is enabled, async output processor cannot be used
+2026-08-28 16:58:14,616	WARNING utils.py:469 -- Detecting docker specified CPUs. In previous versions of Ray, CPU detection in containers was incorrect. Please ensure that Ray has enough CPUs allocated. As a temporary workaround to revert to the prior behavior, set `RAY_USE_MULTIPROCESSING_CPU_COUNT=1` as an env var before starting Ray. Set the env var: `RAY_DISABLE_DOCKER_CPU_WARNING=1` to mute this warning.
+2026-08-28 16:58:16,924	INFO worker.py:2024 -- Started a local Ray instance.
+INFO 08-28 16:58:17 llm_engine.py:237] Initializing an LLM engine (vdev) with config: model='models/meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='models/meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=True, dtype=torch.float16, max_seq_len=8192, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=True, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=0, served_model_name=models/meta-llama/Llama-3.1-8B-Instruct, use_v2_block_manager=True, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=False, use_cached_outputs=False, mm_processor_kwargs=None)
+INFO 08-28 16:58:18 ray_gpu_executor.py:134] use_ray_spmd_worker: False
+[36m(pid=14859)[0m /root/autodl-tmp/CRAG/.venv/lib/python3.10/site-packages/vllm/connections.py:8: RuntimeWarning: Failed to read commit hash:
+[36m(pid=14859)[0m No module named 'vllm._version'
+[36m(pid=14859)[0m   from vllm.version import __version__ as VLLM_VERSION
+INFO 08-28 16:58:22 selector.py:115] Using XFormers backend.
+/root/autodl-tmp/CRAG/.venv/lib/python3.10/site-packages/xformers/ops/fmha/flash.py:211: FutureWarning: `torch.library.impl_abstract` was renamed to `torch.library.register_fake`. Please use that instead; we will remove `torch.library.impl_abstract` in a future version of PyTorch.
+  @torch.library.impl_abstract("xformers_flash::flash_fwd")
+/root/autodl-tmp/CRAG/.venv/lib/python3.10/site-packages/xformers/ops/fmha/flash.py:344: FutureWarning: `torch.library.impl_abstract` was renamed to `torch.library.register_fake`. Please use that instead; we will remove `torch.library.impl_abstract` in a future version of PyTorch.
+  @torch.library.impl_abstract("xformers_flash::flash_bwd")
+INFO 08-28 16:58:23 model_runner.py:1060] Starting to load model models/meta-llama/Llama-3.1-8B-Instruct...
+INFO 08-28 16:58:23 selector.py:115] Using XFormers backend.
+Loading safetensors checkpoint shards:   0% Completed | 0/4 [00:00<?, ?it/s]
+Loading safetensors checkpoint shards:  25% Completed | 1/4 [00:01<00:04,  1.57s/it]
+Loading safetensors checkpoint shards:  50% Completed | 2/4 [00:03<00:03,  1.61s/it]
+Loading safetensors checkpoint shards:  75% Completed | 3/4 [00:04<00:01,  1.63s/it]
+Loading safetensors checkpoint shards: 100% Completed | 4/4 [00:05<00:00,  1.17s/it]
+Loading safetensors checkpoint shards: 100% Completed | 4/4 [00:05<00:00,  1.33s/it]
+
+INFO 08-28 16:58:29 model_runner.py:1071] Loading model weights took 14.9888 GB
+INFO 08-28 16:58:30 distributed_gpu_executor.py:57] # GPU blocks: 1687, # CPU blocks: 2048
+INFO 08-28 16:58:30 distributed_gpu_executor.py:61] Maximum concurrency for 8192 tokens per request: 3.29x
+Generating predictions: 0it [00:00, ?it/s][36m(_extract_chunks pid=14867)[0m /root/autodl-tmp/CRAG/.venv/lib/python3.10/site-packages/vllm/connections.py:8: RuntimeWarning: Failed to read commit hash:
+[36m(_extract_chunks pid=14867)[0m No module named 'vllm._version'
+[36m(_extract_chunks pid=14867)[0m   from vllm.version import __version__ as VLLM_VERSION
+[36m(_extract_chunks pid=14857)[0m /root/autodl-tmp/CRAG/.venv/lib/python3.10/site-packages/vllm/connections.py:8: RuntimeWarning: Failed to read commit hash:
+[36m(_extract_chunks pid=14857)[0m No module named 'vllm._version'
+[36m(_extract_chunks pid=14857)[0m   from vllm.version import __version__ as VLLM_VERSION
+Generating predictions: 1it [00:07,  7.84s/it]Generating predictions: 2it [00:10,  4.57s/it]Generating predictions: 3it [00:12,  3.45s/it]Generating predictions: 4it [00:14,  2.80s/it]Generating predictions: 5it [00:15,  2.37s/it]Generating predictions: 6it [00:16,  2.00s/it]Generating predictions: 7it [00:18,  1.91s/it]Generating predictions: 8it [00:20,  1.99s/it]Generating predictions: 9it [00:22,  1.89s/it]Generating predictions: 10it [00:24,  1.85s/it]Generating predictions: 11it [00:26,  1.89s/it]Generating predictions: 12it [00:28,  1.85s/it]Generating predictions: 13it [00:29,  1.75s/it]Generating predictions: 14it [00:31,  1.91s/it]Generating predictions: 15it [00:34,  2.17s/it]Generating predictions: 16it [00:35,  1.82s/it]Generating predictions: 17it [00:37,  1.78s/it]
