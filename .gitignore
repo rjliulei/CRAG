@@ -9,3 +9,6 @@ models/sentence-transformers/
 # 百度网盘上传临时文件
 *.baiduyun.uploading.cfg
 example_data/dev_data.jsonl
+
+# 论文 PDF 本地保留，不进 Git（体积大、推送易卡；笔记用 .md）
+docs/论文/*.pdf

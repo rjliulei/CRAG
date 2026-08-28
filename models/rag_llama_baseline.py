@@ -56,7 +56,20 @@ VLLM_MAX_MODEL_LEN = 8192
 # Sentence Transformer Parameters
 SENTENTENCE_TRANSFORMER_BATCH_SIZE = 128 # TUNE THIS VARIABLE depending on the size of your embedding model and GPU mem available
 
-# Step 4: abstain when max retrieval cosine score is below threshold (see batch_generate_answer)
+# Step 4 / v2 abstain (read at call time via _abstain_config so .env load order is safe)
+def _abstain_config() -> dict:
+    return {
+        # v1: reject before generation if max query–chunk cosine < tau
+        "v1_enabled": os.getenv("RAG_ABSTAIN_ENABLED", "0") == "1",
+        "v1_min_max_score": float(os.getenv("RAG_ABSTAIN_MIN_MAX_SCORE", "0.40")),
+        # v2: after generation, reject if max answer–chunk cosine < tau
+        "v2_enabled": os.getenv("RAG_ABSTAIN_V2_ENABLED", "0") == "1",
+        "v2_min_answer_sim": float(os.getenv("RAG_ABSTAIN_ANSWER_MIN_SIM", "0.35")),
+        "response": os.getenv("RAG_ABSTAIN_RESPONSE", "I don't know"),
+    }
+
+
+# Back-compat aliases (may be stale if env loaded after import; batch path uses _abstain_config)
 RAG_ABSTAIN_ENABLED = os.getenv("RAG_ABSTAIN_ENABLED", "0") == "1"
 RAG_ABSTAIN_MIN_MAX_SCORE = float(os.getenv("RAG_ABSTAIN_MIN_MAX_SCORE", "0.40"))
 RAG_ABSTAIN_RESPONSE = os.getenv("RAG_ABSTAIN_RESPONSE", "I don't know")
@@ -277,6 +290,8 @@ class RAGModel:
             batch_interaction_ids, batch_search_results
         )
 
+        cfg = _abstain_config()
+
         # Calculate all chunk embeddings
         chunk_embeddings = self.calculate_embeddings(chunks)
 
@@ -300,7 +315,7 @@ class RAGModel:
             cosine_scores = (relevant_chunks_embeddings * query_embedding).sum(1)
 
             max_score = float(cosine_scores.max()) if len(cosine_scores) else 0.0
-            if RAG_ABSTAIN_ENABLED and max_score < RAG_ABSTAIN_MIN_MAX_SCORE:
+            if cfg["v1_enabled"] and max_score < cfg["v1_min_max_score"]:
                 batch_retrieval_results.append([])
                 abstain_flags.append(True)
                 continue
@@ -346,10 +361,31 @@ class RAGModel:
         response_idx = 0
         for abstain in abstain_flags:
             if abstain:
-                answers.append(RAG_ABSTAIN_RESPONSE)
+                answers.append(cfg["response"])
             else:
                 answers.append(responses[response_idx].outputs[0].text)
                 response_idx += 1
+
+        # v2: answer–passage consistency (after generation)
+        if cfg["v2_enabled"]:
+            check_idx = [
+                i
+                for i, a in enumerate(answers)
+                if not abstain_flags[i]
+                and a.strip()
+                and "i don't know" not in a.lower()
+            ]
+            if check_idx:
+                ans_embs = self.calculate_embeddings([answers[i] for i in check_idx])
+                for j, i in enumerate(check_idx):
+                    refs = batch_retrieval_results[i]
+                    if len(refs) == 0:
+                        answers[i] = cfg["response"]
+                        continue
+                    ref_embs = self.calculate_embeddings(list(refs))
+                    sim = float((ref_embs * ans_embs[j]).sum(1).max())
+                    if sim < cfg["v2_min_answer_sim"]:
+                        answers[i] = cfg["response"]
 
         return answers
 

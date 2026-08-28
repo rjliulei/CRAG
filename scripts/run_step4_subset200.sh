@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Step 4：200 子集 RAG 对照 + 拒答（在 AutoDL 上执行）
+# Step 4：200 子集 RAG 对照 / v1 / v2 / 诊断
 # 用法：
-#   cd /root/autodl-tmp/CRAG
-#   bash scripts/run_step4_subset200.sh baseline    # Step 2
-#   bash scripts/run_step4_subset200.sh abstain     # Step 3（τ=0.40）
-#   bash scripts/run_step4_subset200.sh abstain 0.35  # Step 4 调参
+#   bash scripts/run_step4_subset200.sh baseline
+#   bash scripts/run_step4_subset200.sh abstain [tau]      # v1
+#   bash scripts/run_step4_subset200.sh abstain_v2 [sim]   # v2
+#   bash scripts/run_step4_subset200.sh diagnose           # Step A
 
 set -euo pipefail
 
 MODE="${1:-}"
-TAU="${2:-0.40}"
+ARG2="${2:-}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
@@ -42,26 +42,39 @@ set_env_kv() {
 set_env_kv "DATASET_PATH" "$SUBSET"
 
 case "$MODE" in
+  diagnose)
+    echo "=== Step A: max_score diagnose ==="
+    python scripts/diagnose_retrieval_scores.py
+    exit $?
+    ;;
   baseline)
     set_env_kv "RAG_ABSTAIN_ENABLED" "0"
+    set_env_kv "RAG_ABSTAIN_V2_ENABLED" "0"
     LOG="logs/eval_rag_subset200_baseline_$(date +%Y%m%d_%H%M%S).log"
     ;;
   abstain)
+    TAU="${ARG2:-0.40}"
     set_env_kv "RAG_ABSTAIN_ENABLED" "1"
     set_env_kv "RAG_ABSTAIN_MIN_MAX_SCORE" "$TAU"
+    set_env_kv "RAG_ABSTAIN_V2_ENABLED" "0"
     LOG="logs/eval_rag_subset200_abstain_t${TAU/./}_$(date +%Y%m%d_%H%M%S).log"
     ;;
+  abstain_v2)
+    SIM="${ARG2:-0.35}"
+    set_env_kv "RAG_ABSTAIN_ENABLED" "0"
+    set_env_kv "RAG_ABSTAIN_V2_ENABLED" "1"
+    set_env_kv "RAG_ABSTAIN_ANSWER_MIN_SIM" "$SIM"
+    LOG="logs/eval_rag_subset200_abstain_v2_s${SIM/./}_$(date +%Y%m%d_%H%M%S).log"
+    ;;
   *)
-    echo "Usage: $0 baseline | abstain [tau]"
-    echo "  baseline       RAG 原版 (RAG_ABSTAIN_ENABLED=0)"
-    echo "  abstain [tau]  RAG+拒答 (default tau=0.40)"
+    echo "Usage: $0 baseline | abstain [tau] | abstain_v2 [sim] | diagnose"
     exit 1
     ;;
 esac
 
 mkdir -p logs
 echo "=== MODE=$MODE DATASET_PATH=$SUBSET LOG=$LOG ==="
-grep -E '^(DATASET_PATH|RAG_ABSTAIN_ENABLED|RAG_ABSTAIN_MIN_MAX_SCORE)=' "$ENV_FILE" || true
+grep -E '^(DATASET_PATH|RAG_ABSTAIN_ENABLED|RAG_ABSTAIN_MIN_MAX_SCORE|RAG_ABSTAIN_V2_ENABLED|RAG_ABSTAIN_ANSWER_MIN_SIM)=' "$ENV_FILE" || true
 
 python local_evaluation_deepseek.py 2>&1 | tee "$LOG"
 echo "=== DONE. Log: $LOG ==="
