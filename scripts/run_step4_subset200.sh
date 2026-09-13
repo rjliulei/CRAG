@@ -4,6 +4,7 @@
 #   bash scripts/run_step4_subset200.sh baseline
 #   bash scripts/run_step4_subset200.sh abstain [tau]      # v1
 #   bash scripts/run_step4_subset200.sh abstain_v2 [sim]   # v2
+#   bash scripts/run_step4_subset200.sh camus              # CAMUS（Step2+）
 #   bash scripts/run_step4_subset200.sh diagnose           # Step A
 
 set -euo pipefail
@@ -50,13 +51,21 @@ case "$MODE" in
   baseline)
     set_env_kv "RAG_ABSTAIN_ENABLED" "0"
     set_env_kv "RAG_ABSTAIN_V2_ENABLED" "0"
+    set_env_kv "RAG_CAMUS" "0"
     LOG="logs/eval_rag_subset200_baseline_$(date +%Y%m%d_%H%M%S).log"
+    ;;
+  camus)
+    set_env_kv "RAG_ABSTAIN_ENABLED" "0"
+    set_env_kv "RAG_ABSTAIN_V2_ENABLED" "0"
+    set_env_kv "RAG_CAMUS" "1"
+    LOG="logs/eval_rag_subset200_camus_$(date +%Y%m%d_%H%M%S).log"
     ;;
   abstain)
     TAU="${ARG2:-0.40}"
     set_env_kv "RAG_ABSTAIN_ENABLED" "1"
     set_env_kv "RAG_ABSTAIN_MIN_MAX_SCORE" "$TAU"
     set_env_kv "RAG_ABSTAIN_V2_ENABLED" "0"
+    set_env_kv "RAG_CAMUS" "0"
     LOG="logs/eval_rag_subset200_abstain_t${TAU/./}_$(date +%Y%m%d_%H%M%S).log"
     ;;
   abstain_v2)
@@ -64,17 +73,18 @@ case "$MODE" in
     set_env_kv "RAG_ABSTAIN_ENABLED" "0"
     set_env_kv "RAG_ABSTAIN_V2_ENABLED" "1"
     set_env_kv "RAG_ABSTAIN_ANSWER_MIN_SIM" "$SIM"
+    set_env_kv "RAG_CAMUS" "0"
     LOG="logs/eval_rag_subset200_abstain_v2_s${SIM/./}_$(date +%Y%m%d_%H%M%S).log"
     ;;
   *)
-    echo "Usage: $0 baseline | abstain [tau] | abstain_v2 [sim] | diagnose"
+    echo "Usage: $0 baseline | camus | abstain [tau] | abstain_v2 [sim] | diagnose"
     exit 1
     ;;
 esac
 
 mkdir -p logs
 echo "=== MODE=$MODE DATASET_PATH=$SUBSET LOG=$LOG ==="
-grep -E '^(DATASET_PATH|RAG_ABSTAIN_ENABLED|RAG_ABSTAIN_MIN_MAX_SCORE|RAG_ABSTAIN_V2_ENABLED|RAG_ABSTAIN_ANSWER_MIN_SIM)=' "$ENV_FILE" || true
+grep -E '^(DATASET_PATH|RAG_ABSTAIN_ENABLED|RAG_ABSTAIN_MIN_MAX_SCORE|RAG_ABSTAIN_V2_ENABLED|RAG_ABSTAIN_ANSWER_MIN_SIM|RAG_CAMUS|RAG_CAMUS_BUDGET|RAG_CAMUS_DEBUG)=' "$ENV_FILE" || true
 
 python local_evaluation_deepseek.py 2>&1 | tee "$LOG"
 echo "=== DONE. Log: $LOG ==="

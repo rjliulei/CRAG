@@ -5,8 +5,9 @@
 # LICENSE file in the root directory of this source tree.
 
 import os
+import re
 from collections import defaultdict
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 import ray
@@ -73,6 +74,245 @@ def _abstain_config() -> dict:
 RAG_ABSTAIN_ENABLED = os.getenv("RAG_ABSTAIN_ENABLED", "0") == "1"
 RAG_ABSTAIN_MIN_MAX_SCORE = float(os.getenv("RAG_ABSTAIN_MIN_MAX_SCORE", "0.40"))
 RAG_ABSTAIN_RESPONSE = os.getenv("RAG_ABSTAIN_RESPONSE", "I don't know")
+
+
+# CAMUS: constraint-aware marginal utility selection (read at call time)
+_CAMUS_STOPWORDS = frozenset(
+    {
+        "a", "an", "the", "and", "or", "but", "if", "then", "else", "when", "where",
+        "what", "which", "who", "whom", "whose", "how", "why", "is", "are", "was",
+        "were", "be", "been", "being", "have", "has", "had", "do", "does", "did",
+        "will", "would", "could", "should", "may", "might", "must", "shall", "can",
+        "of", "in", "on", "at", "to", "for", "from", "by", "with", "as", "into",
+        "about", "than", "that", "this", "these", "those", "it", "its", "their",
+        "there", "here", "not", "no", "yes", "all", "any", "some", "such", "only",
+        "own", "same", "so", "too", "very", "just", "also", "please", "tell", "me",
+        "you", "your", "we", "our", "they", "he", "she", "his", "her", "them",
+    }
+)
+
+
+def _camus_config() -> dict:
+    return {
+        "enabled": os.getenv("RAG_CAMUS", "0") == "1",
+        "budget": int(os.getenv("RAG_CAMUS_BUDGET", "8")),
+        "epsilon": float(os.getenv("RAG_CAMUS_EPSILON", "0")),
+        "lam": float(os.getenv("RAG_CAMUS_LAMBDA", "0.5")),
+        "gamma": float(os.getenv("RAG_CAMUS_GAMMA", "1.0")),
+        "pool": int(os.getenv("RAG_CAMUS_POOL", "40")),
+        "harm_sim_tau": float(os.getenv("RAG_CAMUS_HARM_SIM_TAU", "0.55")),
+        "debug": os.getenv("RAG_CAMUS_DEBUG", "0") == "1",
+    }
+
+
+def _camus_parse_constraints(query: str) -> dict:
+    """Rule-based constraints from the query only (no labels / GT)."""
+    years = re.findall(r"\b(?:19|20)\d{2}\b", query)
+    after_years = re.findall(
+        r"\b(?:after|since|post|later than)\s+((?:19|20)\d{2})\b", query, flags=re.I
+    )
+    before_years = re.findall(
+        r"\b(?:before|until|prior to)\s+((?:19|20)\d{2})\b", query, flags=re.I
+    )
+
+    q_starters = {
+        "What", "Which", "Who", "Where", "When", "How", "Why",
+        "Is", "Are", "Do", "Does", "Did", "In", "On", "At", "The", "A", "An", "Of",
+    }
+    entities: List[str] = []
+    for ent in re.findall(
+        r"\b([A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+)*)\b", query
+    ):
+        parts = [p for p in ent.split() if p not in q_starters]
+        if parts:
+            entities.append(" ".join(parts).lower())
+
+    is_set = bool(
+        re.search(
+            r"\b(list|names?|movies?|films?|members?|albums?|songs?|episodes?|"
+            r"which of|how many|all the|as many)\b",
+            query,
+            flags=re.I,
+        )
+    ) or bool(re.search(r"^\s*who are\b", query, flags=re.I))
+
+    atoms: List[str] = []
+    for y in after_years:
+        atoms.append(f"year>{y}")
+    for y in before_years:
+        atoms.append(f"year<{y}")
+    used_rel = set(after_years) | set(before_years)
+    for y in years:
+        if y not in used_rel:
+            atoms.append(y)
+
+    for ent in entities:
+        atoms.append(ent)
+
+    if not atoms:
+        for w in re.findall(r"[A-Za-z][A-Za-z0-9\-']{3,}", query):
+            wl = w.lower()
+            if wl not in _CAMUS_STOPWORDS:
+                atoms.append(wl)
+        atoms = list(dict.fromkeys(atoms))[:8]
+    else:
+        atoms = list(dict.fromkeys(atoms))
+
+    return {
+        "atoms": atoms,
+        "is_set": is_set,
+        "years": years,
+        "after_years": after_years,
+        "before_years": before_years,
+    }
+
+
+def _camus_atom_supported(text: str, atom: str) -> bool:
+    """Whether chunk text supports one constraint atom."""
+    if atom.startswith("year>"):
+        thr = int(atom[5:])
+        return any(int(y) > thr for y in re.findall(r"\b(?:19|20)\d{2}\b", text))
+    if atom.startswith("year<"):
+        thr = int(atom[5:])
+        return any(int(y) < thr for y in re.findall(r"\b(?:19|20)\d{2}\b", text))
+    return atom.lower() in text.lower()
+
+
+def _camus_covered_atoms(texts: Sequence[str], atoms: Sequence[str]) -> Set[str]:
+    blob = " ".join(texts)
+    return {a for a in atoms if _camus_atom_supported(blob, a)}
+
+
+def _camus_cov_gain(
+    chunk: str, selected_texts: Sequence[str], atoms: Sequence[str]
+) -> float:
+    if not atoms:
+        return 0.0
+    before = _camus_covered_atoms(selected_texts, atoms)
+    after = _camus_covered_atoms(list(selected_texts) + [chunk], atoms)
+    return float(len(after - before))
+
+
+def _camus_list_inducement(chunk: str) -> bool:
+    if chunk.count(",") >= 3:
+        return True
+    return bool(
+        re.search(r"\b(including|such as|e\.g\.|for example|among them)\b", chunk, re.I)
+    )
+
+
+def _camus_harm(
+    chunk: str,
+    query_cos: float,
+    gain: float,
+    is_set: bool,
+    harm_sim_tau: float,
+) -> float:
+    harm = 0.0
+    if query_cos > harm_sim_tau and gain <= 0:
+        harm += 1.0
+    if is_set and _camus_list_inducement(chunk):
+        harm += 1.0
+    return harm
+
+
+def _camus_select(
+    query: str,
+    chunks: np.ndarray,
+    cosine_scores: np.ndarray,
+    cfg: dict,
+    chunk_embeddings: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """
+    Greedy CAMUS: ΔU ≈ CovGain − λ·redundancy − γ·harm.
+
+    Uses only query text, chunk text, and embeddings/cosine (no GT / labels).
+    """
+    n = len(chunks)
+    if n == 0:
+        return chunks
+
+    budget = min(int(cfg["budget"]), n)
+    eps = float(cfg["epsilon"])
+    lam = float(cfg["lam"])
+    gamma = float(cfg["gamma"])
+    pool = min(int(cfg.get("pool", 40)), n)
+    harm_tau = float(cfg.get("harm_sim_tau", 0.55))
+    debug = bool(cfg.get("debug", False))
+
+    constraints = _camus_parse_constraints(query)
+    atoms: List[str] = constraints["atoms"]
+    is_set = bool(constraints["is_set"])
+
+    # Restrict greedy search to top-`pool` by query cosine (speed on long HTML).
+    pool_idx = (-cosine_scores).argsort()[:pool]
+    cosine_scores = np.asarray(cosine_scores, dtype=np.float64)
+    if chunk_embeddings is not None:
+        emb = np.asarray(chunk_embeddings, dtype=np.float64)
+    else:
+        emb = None
+
+    selected: List[int] = []
+    selected_texts: List[str] = []
+    debug_rows: List[Tuple[int, float, float, float, float]] = []
+
+    while len(selected) < budget:
+        best_i: Optional[int] = None
+        best_du = float("-inf")
+        best_parts = (0.0, 0.0, 0.0)
+
+        for i in pool_idx:
+            i = int(i)
+            if i in selected:
+                continue
+            chunk = str(chunks[i])
+            gain = _camus_cov_gain(chunk, selected_texts, atoms)
+            if selected and emb is not None:
+                red = float(np.max(emb[selected] @ emb[i]))
+            elif selected:
+                # No chunk embeddings: approximate redundancy via query-cos proximity.
+                red = float(
+                    max(1.0 - abs(float(cosine_scores[i]) - float(cosine_scores[j])) for j in selected)
+                )
+            else:
+                red = 0.0
+            harm = _camus_harm(
+                chunk, float(cosine_scores[i]), gain, is_set, harm_tau
+            )
+            du = gain - lam * red - gamma * harm
+            if du > best_du:
+                best_du = du
+                best_i = i
+                best_parts = (gain, red, harm)
+
+        if best_i is None or best_du <= eps:
+            break
+
+        selected.append(best_i)
+        selected_texts.append(str(chunks[best_i]))
+        debug_rows.append((best_i, best_du, *best_parts))
+
+    # Avoid empty context if every ΔU ≤ ε on round 1.
+    if not selected:
+        selected = [int(pool_idx[0])]
+        selected_texts = [str(chunks[selected[0]])]
+        if debug:
+            debug_rows.append((selected[0], float("-inf"), 0.0, 0.0, 0.0))
+
+    if debug:
+        print(
+            f"[CAMUS] q={query[:80]!r} atoms={atoms[:8]} is_set={is_set} "
+            f"picked={len(selected)}/{budget}"
+        )
+        for rank, (idx, du, gain, red, harm) in enumerate(debug_rows, 1):
+            snippet = str(chunks[idx]).replace("\n", " ")[:90]
+            print(
+                f"  #{rank} i={idx} ΔU={du:.3f} gain={gain:.2f} red={red:.3f} "
+                f"harm={harm:.2f} cos={float(cosine_scores[idx]):.3f} | {snippet}"
+            )
+
+    return np.asarray([chunks[i] for i in selected], dtype=object)
+
 
 #### CONFIG PARAMETERS END---
 
@@ -291,6 +531,7 @@ class RAGModel:
         )
 
         cfg = _abstain_config()
+        camus_cfg = _camus_config()
 
         # Calculate all chunk embeddings
         chunk_embeddings = self.calculate_embeddings(chunks)
@@ -320,10 +561,19 @@ class RAGModel:
                 abstain_flags.append(True)
                 continue
 
-            # and retrieve top-N results.
-            retrieval_results = relevant_chunks[
-                (-cosine_scores).argsort()[:NUM_CONTEXT_SENTENCES]
-            ]
+            # Context selection: baseline top-N, or CAMUS hook (Step 2 stub = top-budget).
+            if camus_cfg["enabled"]:
+                retrieval_results = _camus_select(
+                    queries[_idx],
+                    relevant_chunks,
+                    cosine_scores,
+                    camus_cfg,
+                    chunk_embeddings=relevant_chunks_embeddings,
+                )
+            else:
+                retrieval_results = relevant_chunks[
+                    (-cosine_scores).argsort()[:NUM_CONTEXT_SENTENCES]
+                ]
 
             # You might also choose to skip the steps above and
             # use a vectorDB directly.
