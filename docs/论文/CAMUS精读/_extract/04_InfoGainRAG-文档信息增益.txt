@@ -1,0 +1,979 @@
+
+===== PAGE 1/15 =====
+Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing, pages 7190–7204
+November 4-9, 2025 ©2025 Association for Computational Linguistics
+InfoGain-RAG: Boosting Retrieval-Augmented Generation through
+Document Information Gain-based Reranking and Filtering
+Zihan Wang1,*
+Zihan Liang1,*
+Zhou Shao2,*
+Yufei Ma1
+Huangyu Dai1 Ben Chen1,†
+Lingtao Mao1 Chenyi Lei1
+Yuqing Ding1 Han Li1
+1Kuaishou Technology, Beijing, China
+2Peking University, Beijing, China
+Abstract
+Retrieval-Augmented Generation (RAG) has
+emerged as a promising approach to address
+key limitations of Large Language Models
+(LLMs), such as hallucination, outdated knowl-
+edge, and lacking reference. However, current
+RAG frameworks often struggle with identify-
+ing whether retrieved documents meaningfully
+contribute to answer generation. This short-
+coming makes it difficult to filter out irrelevant
+or even misleading content, which notably im-
+pacts the final performance. In this paper, we
+propose Document Information Gain (DIG), a
+novel metric designed to quantify the contribu-
+tion of retrieved documents to correct answer
+generation. DIG measures a document’s value
+by computing the difference of LLM’s genera-
+tion confidence with and without the document
+augmented. Further, we introduce InfoGain-
+RAG, a framework that leverages DIG scores
+to train a specialized reranker, which prioritizes
+each retrieved document from exact distinguish-
+ing and accurate sorting perspectives. This ap-
+proach can effectively filter out irrelevant docu-
+ments and select the most valuable ones for bet-
+ter answer generation. Extensive experiments
+across various models and benchmarks demon-
+strate that InfoGain-RAG can significantly out-
+perform existing approaches, on both single
+and multiple retrievers paradigm. Specifically
+on NaturalQA, it achieves the improvements
+of 17.9%, 4.5%, 12.5% in exact match accu-
+racy against naive RAG, self-reflective RAG
+and modern ranking-based RAG respectively,
+and even an average of 15.3% increment on
+advanced proprietary model GPT-4o across all
+datasets. These results demonstrate the feasibil-
+ity of InfoGain-RAG as it can offer a reliable
+solution for RAG in multiple applications.
+1 Introduction
+Recent advancements in Natural Language Process-
+ing (NLP) have been significantly propelled by the
+*Equal Contribution.
+†Corresponding Author.
+emergence of LLMs (Brown et al., 2020; Achiam
+et al., 2024), which demonstrates remarkable ca-
+pabilities across many knowledge-intensive tasks.
+However, maintaining reliability remains an on-
+going challenge for LLMs, as they often struggle
+with issues such as hallucination, outdated infor-
+mation and lacking reference. RAG has emerged
+as a promising solution to the aforementioned is-
+sues. It can enhance responses by augmenting
+prompts with external information, especially when
+the model’s inherent knowledge is limited (Ram
+et al., 2023). However, the generation quality heav-
+ily depends on both the selection of relevant doc-
+uments and their sequential ordering within the
+LLMs’ context window (Liu et al., 2023).
+Research addressing RAG document prioritiza-
+tion spans multiple perspectives, of which three
+pipelines gain significant attention. (Bajaj et al.,
+2018; Gao et al., 2023; Ho et al., 2020) The
+first pipeline focuses on retriever optimization,
+which enhances retrieval performance through task-
+specific training (Lewis et al., 2020; Shi et al., 2023;
+Chen et al., 2024a). However, this approach be-
+comes impractical when working with multiple re-
+trievers (Fan et al., 2024). The second pipeline
+leverages LLMs’ self-reflection capabilities to eval-
+uate the utility of documents. It employs LLMs
+to analyze each document and determine whether
+it should be used. Although feasible, the multi-
+ple LLM calls introduce substantial computational
+overhead (Asai et al., 2024; Yan et al., 2024; Chang
+et al., 2024). The third pipeline adds a reranker
+after the retrieval stage to reorder all retrieved doc-
+uments (Chen et al., 2024b; Li et al., 2024). While
+this approach can effectively address multiple re-
+trievers, the only consideration on semantic similar-
+ity may fail to select the most useful documents for
+generation (as shown in the Figure 6 of Appendix
+A). All these shortcomings limit their further prac-
+tical application.
+To address these limitations, we propose a novel
+7190
+
+===== PAGE 2/15 =====
+RAG framework, InfoGain-RAG, to filter out ir-
+relevant or even misleading documents, and pri-
+oritize the most valuable ones for answer genera-
+tion. Specifically, we firstly introduce a new metric
+named Document Information Gain (DIG), which
+calculates the change in LLM’s generation confi-
+dence with and without the document augmented.
+A higher DIG score means the document has higher
+information value. Then, a multi-task training strat-
+egy is designed, enabling one newly added rerank-
+ing module to predict the DIG score for each docu-
+ment. Only those with a score greater than a certain
+threshold will be augmented into the LLM for final
+generation. This reranking module is plug-and-
+play across diverse models and tasks. Furthermore,
+it can efficiently handle documents from multiple
+retrievers by invoking LLM only once for the entire
+process and the low computational overhead makes
+it feasible for the real application.
+Extensive evaluations on two different types
+of tasks: open-domain question answering (Trivi-
+aQA (Joshi et al., 2017), NaturalQA (Kwiatkowski
+et al., 2019), and PopQA (Mallen et al., 2023)) and
+fact verification (FM2 (Eisenschlos et al., 2021))
+spanning both proprietary LLMs (GPT, Claude)
+(Wu et al., 2023; Eisele-Metzger et al., 2024)
+and open-source models (LLaMA, Qwen, Gemma,
+DeepSeek) (Touvron et al., 2023; Bai et al., 2023;
+Team et al., 2024; Liu et al., 2024), demonstrate
+substantial improvements of InfoGain-RAG over
+existing methods. Specifically on NaturalQA, it
+achieves significant gains in Exact Match accuracy:
+outperforming naive RAG by 17.9%, retriever-
+optimized RAG by 6.8%, self-reflective RAG by
+4.5%, and modern ranking-based RAG by 12.5%.
+Notably, even compared to the proprietary state-of-
+the-art reranker GTE-7B (Zhang et al., 2024), our
+method (355M) still demonstrates a 3.4% improve-
+ment. These consistent performance gains extend
+across TriviaQA, PopQA and FM2, validating our
+approach’s effectiveness across diverse scenarios.
+Our main contributions include:
+• We introduce a novel metric calledDocument
+Information Gain (DIG), to quantify each re-
+trieved document’s impact on the LLM’s gen-
+eration confidence. Different from semantic
+similarity, DIG can more accurately evaluate
+whether the document is helpful for generat-
+ing a correct answer;
+• We develop a multi-task training strategy,
+which is used to optimize one reranker added
+after the retriever, with the aim of fitting the
+DIG score for each document. This strategy
+is designed from the exact distinguishing and
+accurate sorting perspectives, so as to filter
+out the irrelevant and select the most valuable
+documents for answer generation.
+• Integrating the DIG and the multi-task
+reranker, we propose InfoGain-RAG, a com-
+prehensive framework for enhancing RAG.
+This framework can improve the quality of
+generation with both single and multiple re-
+trievers, showing strong adaptability across
+various real-world settings with only an effi-
+cient, plug-and-play reranking module.
+2 Related Work
+RAG has emerged as a promising solution to ad-
+dress fundamental limitations of LLMs. However,
+a key challenge in RAG systems lies in effectively
+evaluating and selecting the most valuable docu-
+ments for answer generation. Existing document
+selections in RAG broadly follow three approaches:
+The first approach optimizes retrievers through
+training on task-specific datasets. RePlug (Shi et al.,
+2023) proposed a training pipeline that uses black-
+box LLM outputs as supervision signals to optimize
+the retriever, aiming to reduce LLM perplexity. RA-
+DIT (Lin et al., 2023) proposed a dual instruction
+tuning framework that jointly optimizes both the
+LLM and retriever. Though useful, they struggle
+with multiple retrievers.
+The second approach aims to evaluate retrieved
+documents utility by LLMs’s self-reflection capa-
+bilities (Asai et al., 2024; Yan et al., 2024). Self-
+RAG introduces reflection tokens that allow the
+LLM to adaptively retrieve passages on-demand
+and critique both the retrieved content and its own
+generations. While effective in identifying valuable
+documents, multiple LLM calls introduce substan-
+tial computation overhead.
+The third approach incorporates a reranker to re-
+order retrieved documents, typically including the
+open-source reranker BGE (Chen et al., 2024b) and
+proprietary GTE-7B (Zhang et al., 2024). BGE is
+a small encoder initially trained on over 300M text
+pairs, then supervised fine-tuning on high-quality
+labeled data, while GTE-7B trains a large long-
+context LLM to learn the hybrid document repre-
+sentations (both dense and sparse). However, BGE
+is mainly trained to capture fine-grained semantic
+relationships, which may fail to select truly helpful
+7191
+
+===== PAGE 3/15 =====
+documents, and GTE is computationally expensive
+for practical deployment.
+3 Method
+In this section, we present InfoGain-RAG to ad-
+dress the key challenges discussed earlier. Our
+framework consists of two main components: (1)
+Document Information Gain (DIG), a metric that
+quantifies a document’s contribution to correct an-
+swer generation by measuring changes in LLM’s
+generation confidence scores, along with an effi-
+cient pipeline for collecting high-quality training
+data, and (2) a multi-task reranker that combines
+document relevance classification and ranking ob-
+jectives to optimize document selection. By in-
+corporating these, our framework enables effec-
+tive document selection without requiring multiple
+LLM calls, making it both computationally effi-
+cient and practical for real-world applications.
+3.1 Document Information Gain
+The core of InfoGain-RAG lies in quantifying each
+document’s contribution to correct answer gener-
+ation through calculating the information gain of
+each retrieval. This section details our methodol-
+ogy for computing DIG and utilizing it to build
+high-quality training data. The complete data col-
+lection pipeline is presented in Algorithm 1. To
+compute DIG, we first propose a robust approach
+for estimating LLM’s generation confidence, and
+then use this estimation to measure the information
+gain provided by each document.
+Algorithm 1 DIG Data Collection Pipeline
+Require: Query set Q, Document corpus D, LLM ϕ
+Ensure: DIG dataset T
+1: T ←∅
+2: for each query x ∈Q do
+3: Retrieve candidate documents Dx from D
+4: Get confidence pϕ(y|x) (defined in equation 2) without
+documents
+5: for each doc d ∈Dx do
+6: Get confidence pϕ(y|x,d) with the document
+7: Calculate DIG (defined in equation 3)
+8: T ←T∪{(x,d,DIG(d|x))}
+9: end for
+10: end for
+11: return T
+3.1.1 Answer Generation Probability
+A key challenge in computing DIG is estimating the
+probability of a specific answer. A straightforward
+way would be to multiply the probabilities of indi-
+vidual tokens as the final confidence score. How-
+ever, this approach faces two key challenges: First,
+it suffers from the length bias problem (Shi et al.,
+2021) where longer sequences tend to receive lower
+scores as any single low token probability severely
+impacts the overall score. Second, treating all to-
+kens equally fails to capture the strongest signal
+for generation quality (Gangi Reddy et al., 2024)
+which initial tokens often provide. To address these,
+we propose a two-component approach:
+Sliding Window Smoothing: To mitigate the
+length bias problem, we implement a sliding win-
+dow smoothing mechanism. For each token ti in
+the answer sequence, its smoothed probability is
+calculated as:
+psmooth(ti) = 1
+W
+i+⌊W/2⌋∑
+j=i−⌊W/2⌋
+p(tj) (1)
+where W is the window size and p(tj) represents
+the original token probability, obtained by normal-
+izing LLM logits (Yenduri et al., 2024).
+Token Importance Weighting: It is reported
+that initial tokens often carry stronger signals in
+model generation(Gangi Reddy et al., 2024). Incor-
+porating this observation, we apply higher weights
+to the first k tokens when computing probability
+scores, as they typically contain core semantic in-
+formation for the response. The final formula is as
+follows:
+pϕ(y|x) =
+k∏
+i=1
+(psmooth(ti))ωi·α ·
+|y|∏
+j=k+1
+(psmooth(tj))1−α
+(2)
+where ωi are the importance weights for the first k
+tokens, αis a weight hyper-parameter, and |y|is
+the answer length.
+3.1.2 Calculation of DIG
+With a reliable approach to estimate answer gen-
+eration probability, we now define the calculation
+of DIG, as shown in Figure 1(NOTE part). Unlike
+traditional relevance metrics that rely on lexical
+overlap or semantic similarity, DIG directly mea-
+sures how much a document improves the LLM’s
+confidence in generating the correct answer.
+Formally, given an LLM ϕ, a query x, and
+its corresponding ground truth answer y, the
+DIG for a document retrieved di(di ∈ D,D =
+{d1,d2,..., d|D|}) is defined as:
+DIG(di|x)
+def
+= pϕ(y|x,di) −pϕ(y|x) (3)
+where pϕ(y|x,di) represents the model’s output
+confidence with both the query and the document,
+and pϕ(y|x) is the query-only confidence.
+7192
+
+===== PAGE 4/15 =====
+Figure 1: Illustrations of InfoGain-RAG. STEP 1: Distinguish proficient queries from challenging ones; STEP 2:
+Retrieve top-k documents for each query and calculate their DIG scores; STEP 3: Train the multi-task reranker;
+STEP 4: Inference with InfoGain-RAG; NOTE: Calculation of DIG.
+Based on above, we establish a data collection
+pipeline that begins by categorizing queries based
+on the model’s baseline performance without re-
+trieved documents, shown in Figure 1 (STEP 1):
+• Model-Proficient Queries: Queries that the
+LLM can answer correctly using only its in-
+herent knowledge (i.e., high pϕ(y|x)). These
+queries are particularly effective for identify-
+ing noisy documents through DIG <0, while
+positive DIG samples are naturally rare since
+external correct information adds little value
+to already-known answers.
+• Model-Challenging Queries: Queries that
+the LLM shows low confidence without ex-
+ternal information (i.e., low pϕ(y|x)). These
+queries facilitate us to identify helpful docu-
+ments, as confidence increases (DIG >0).
+Based on DIG, documents are categorized into
+three groups (see Figure 5):
+• DIG > 0: Documents that enhance the
+model’s confidence, containing relevant and
+helpful information that should be prioritized
+during reranking.
+• DIG ≈0: Documents that neither improve
+nor diminish confidence and occur in two sce-
+narios: (1) the document contains no mean-
+ingful information for answering the query, or
+(2) LLM has already mastered the required
+knowledge during pre-training, making addi-
+tional correct information unnecessary.
+• DIG <0: Documents that reduce confidence
+and contain misleading or contradictory infor-
+mation that should be filtered out.
+This categorization offers two key advantages:
+7193
+
+===== PAGE 5/15 =====
+1) quantitative measurement of document utility
+through DIG scores, enabling both automatic iden-
+tification of high-quality documents and precisely
+filtering noise; and 2) fine-grained document prior-
+itization through continuous DIG scores, which al-
+lows optimal document ordering during inference.
+By computing DIG across diverse query-
+document pairs, we create a rich training dataset
+capturing both absolute relevance and relative im-
+portance of documents. This dataset serves as the
+foundation for training our specialized reranker, as
+detailed in the following section.
+3.2 Multi-task Reranker
+Building on DIG-scored training data collected
+above, we propose a multi-task learning strategy to
+train our reranker to select the most valuable docu-
+ments for correct answer generation. The training
+objective combines Cross-Entropy (CE) loss and
+Margin loss to filter out noisy content and prioritize
+highly effective documents based on DIG scores.
+CE loss enables the model to distinguish between
+helpful and noisy documents through binary clas-
+sification, while margin loss optimizes document
+ordering based on their DIG values. This unified
+training approach enables our reranker to simulta-
+neously learn discriminative document classifica-
+tion and fine-grained ranking preferences, leading
+to robust document selection for RAG.
+3.2.1 Document Relevance Classification
+The first task focuses on the relevance determina-
+tion of the retrievals through binary classification.
+Building upon the former collected data, we train
+the reranker to distinguish documents that have
+substantial contributions or potential harm to an-
+swer generation. Specifically, we employ CE loss
+to optimize the reranker θto achieve this objective:
+min
+θ
+LCE = 1
+N
+N∑
+i=1
+[
+−yilog(p(xi,di))
+−(1 −yi) log(1−p(xi,di))
+]
+s.t. p(xi,di) ∈[0,1],yi ∈{0,1},∀i= 1,...,N
+(4)
+Here, p(xi,di) represents the predicted probabil-
+ity that document di will achieve a positive DIG
+score for query xi. The label yi is determined by
+our previously computed DIG scores, with yi = 1
+for documents whose score is above upper decision
+boundary b1 and yi = 0for those below lower deci-
+sion boundary b2. These thresholds effectively sep-
+arate helpful documents from harmful ones. These
+hyper-parameters selection will be detailed in the
+experiment section. This classification-based learn-
+ing not only helps identify useful documents but
+also facilitates better learning of relative document
+ordering through the joint training process.
+3.2.2 Document Ranking Optimization
+The second task focuses on learning relative doc-
+ument importance through pairwise comparison.
+Inspired by Circle Loss (Sun et al., 2020), we in-
+troduce a margin-based learning objective that ex-
+plicitly models the relative ordering of documents
+based on their DIG values. Given a query, this
+objective constrains the maximum score of neg-
+ative query-document pairs to be lower than the
+minimum score of positive pairs:
+min
+θ
+LMargin = [max (sn) −min (sp)]+
+with [x]+ = max(x,0)
+(5)
+where sp and sn denote scores for pairs with
+DIG values above b1 and below b2 respectively,
+and θdenotes reranker. To involve all samples in
+one process, we employ the LogSumExp function
+to approximate extremal value:
+max {x1,...,x n}= log (exp (max (xi))) ≈LSE(xn) ,
+min {x1,...,x n}= −max {−x1,..., −xn}
+≈−LSE(−xn)
+(6)
+where LSE(xn) is the LogSumExp function,
+with detailed derivation provided in Appendix B.1.
+Substitute the LogSumExp approximations into
+equation (5) and yield:
+min
+θ
+LMargin ≈[LSE(γ(sn)) −(−LSE(−γ(sp)))]+
+≈log
+[
+1 +
+K∑
+i=1
+L∑
+j=1
+exp
+(
+γ
+(
+sj
+n −si
+p
+))]
+(7)
+where γis a scaling factor controlling the contribu-
+tion of non-extremal pairs and Kand Ldenote the
+number of positive and negative document pairs.
+Detailed derivation is provided in Appendix B.2.
+Softplus is used to smooth the ReLU function:
+Softplus(x) = log (1 +ex) ≈[x]+ (8)
+By integrating CE loss and margin loss with
+weight β, our multi-task training objective enables
+the reranker to jointly optimize DIG and inter-
+document relationships:
+Ltotal = βLCE + (1−β)LMargin (9)
+7194
+
+===== PAGE 6/15 =====
+Figure 2: The relationship between the hyper-parameter
+βand accuracy on TriviaQA, LLaMA3.1-8B achieves
+optimum at β = 0.8, while Qwen2.5-14B at 0.7.
+This unified approach produces a robust reranker
+that considers both absolute document relevance
+and relative ordering preferences within the re-
+trieved documents, leading to more effective docu-
+ment reranking and filtering for RAG systems (see
+Figure 2 for empirical study on balancing these two
+objectives via hyper-parameter β).
+During inference, InfoGain-RAG enhances naive
+RAG pipelines by adding an efficient document
+reranking step while maintaining low computa-
+tional overhead, as illustrated in Figure 1 (STEP
+4). The process begins with document retrieval, fol-
+lowed by our trained reranker which both reorders
+documents and filters out those below a quality
+threshold. The filtered and reranked documents are
+then passed to LLM for final answer generation
+while only calling once.
+4 Experiment
+We evaluate InfoGain-RAG in four experiment se-
+ries. First, we compare it with modern ranking
+methods, including the open-source reranker of
+BGE-Reranker-Large (Chen et al., 2024b) trained
+on 300M samples, and the state-of-the-art pro-
+prietary reranker GTE-7B (Zhang et al., 2024).
+Second, we compare with retriever optimization
+approaches like RePlug (Shi et al., 2023) and
+RADIT (Lin et al., 2023), and self-reflection ap-
+proaches like Self-RAG (Asai et al., 2024) and
+CRAG (Yan et al., 2024). Third, we test InfoGain-
+RAG on combined documents retrieved from Con-
+triever (Lei et al., 2023), BM25 (Robertson and
+Zaragoza, 2009) and DPR (Karpukhin et al., 2020)
+to demonstrate its capability to handle multiple
+retrievers. Last, several ablation studies are con-
+ducted to verify the effectiveness from different
+aspects. The datasets and models we used are pub-
+licly accessible.
+4.1 Setup
+Tasks and Datasets. We experiment on two tasks
+using four English datasets: (1) open-domain
+question answering, including TriviaQA (Joshi
+et al., 2017), NaturalQA (Kwiatkowski et al., 2019),
+and PopQA (Mallen et al., 2023); (2) fact verifica-
+tion, FM2 (Eisenschlos et al., 2021). We use the
+December 2018 Wikipedia dump (Karpukhin et al.,
+2020) as the retrieval corpus.
+Models and Metrics. All evaluations are con-
+ducted across both proprietary LLMs (GPT-
+4o-20241120, ChatGPT-20240125, and Claude-
+3.5-Sonnet-20241022) and open-source models
+(LLaMA3.1, Qwen2, Gemma2, DeepSeek-V3, and
+DeepSeek-R1). We adopt Exact Match (EM) ac-
+curacy (Rajpurkar et al., 2016) as the metric. EM
+provides a strict evaluation of response accuracy
+while accommodating multiple correct answer for-
+mats, as it compares the model outputs with all
+valid answers provided.
+Implementation Details. We sample 110K
+queries from TriviaQA dataset (with train-test
+overlap removed) and calculate DIG scores for
+all collected <query, answer, document>triplets
+using Qwen2.5-7B. The scoring results in three
+categories: 70K triplets with high positive gain
+(>b1 = 0.5), 150K triplets with negative gain
+(<b2 = −0.2), and 1200K triplets showing neg-
+ligible information gain ( −0.05 ∼0.05). From
+these scored triplets, we create a unified training
+dataset of 88K samples through different sampling
+strategies for each loss: for CE loss, we sample bal-
+anced query-document pairs with equal numbers of
+positive and negative samples (68K), while for mar-
+gin loss, we sample query-document groups (34K)
+where each query is paired with 3-5 high-DIG doc-
+uments and augmented with additional negative
+and negligible documents.
+For experimental settings, we implement our
+reranker using RoBERTa-large (Liu et al., 2019)
+to rerank the top 100 documents retrieved by Con-
+triever (Lei et al., 2023). Our reranker is trained on
+an A800 GPU using Adam optimizer with a learn-
+ing rate of 5e-6, βvalue of 0.75 and γvalue of 15.
+For DIG calculation, we set importance weights ωi
+to 0.8 for the first k = 3tokens and use α = 0.6
+for balancing token probabilities. During inference,
+we select the top 4 documents and employ a docu-
+ment filtering threshold of 0.2 while retaining all
+7195
+
+===== PAGE 7/15 =====
+Table 1: Performance Comparison of RAG Reranking approaches with single-retriever (Contriever).
+Model TriviaQA NaturalQA PopQA FM2RAG BGE(550M)§GTE(7B)3 Ours(355M)RAG BGE(550M)§GTE(7B)3 Ours(355M)RAG BGE(550M)§GTE(7B)3 Ours(355M)RAG BGE(550M)§GTE(7B)3 Ours(355M)
+Qwen2.5-0.5B48.5% 48.6% 49.5% 55.8%22.5% 27.3% 29.5% 35.3%26.5% 35.7% 35.3% 36.5%53.0% 52.3% 55.6% 58.7%Qwen2.5-1.5B50.4% 59.1% 63.3% 66.3%30.7% 39.5% 45.2% 47.2%31.3% 41.3% 44.2% 43.0%69.1% 69.5% 71.1% 73.9%Qwen2.5-7B52.9% 67.0% 69.5% 72.1%36.3% 41.8% 49.9% 53.6%32.4% 43.4% 43.7% 47.6%72.5% 74.5% 77.8% 79.9%Qwen2.5-14B56.1% 68.4% 71.1% 72.9%36.0% 42.7% 52.5% 53.8%31.8% 44.1% 45.9% 49.4%72.6% 75.7% 76.4% 79.4%Qwen2.5-32B58.7% 70.3% 72.0% 74.7%36.4% 42.1% 53.7% 55.9%32.3% 45.5% 48.1% 50.5%73.7% 75.6% 79.0% 81.2%Qwen2.5-72B59.9% 70.6% 73.4% 76.3%40.3% 44.9% 53.9% 58.1%34.0% 44.8% 49.5% 51.4%73.6% 75.9% 80.4% 83.4%Qwen3-8B57.9% 67.6% 71.1% 72.3%34.0% 41.5% 50.9% 52.6%32.1% 43.6% 46.5% 49.1%71.4% 76.1% 80.9% 80.0%
+LLaMA3.1-8B55.1% 65.5% 67.5% 70.4%33.6% 39.4% 46.9% 50.7%31.7% 41.3% 44.6% 47.1%74.3% 77.6% 79.5% 81.2%LLaMA3.1-70B54.5% 67.9% 67.4% 71.3%35.1% 39.9% 48.6% 51.6%30.4% 43.0% 47.2% 47.6%77.0% 79.5% 81.1% 82.4%LLaMA3.1-405B56.7% 69.2% 73.8% 74.6%35.8% 41.5% 52.3% 53.3%30.5% 43.4% 47.3% 49.5%75.9% 77.6% 80.6% 83.1%
+Gemma-2-9B54.3% 64.4% 69.0% 71.3%34.3% 39.6% 44.6% 56.6%31.4% 43.9% 45.5% 49.3%75.4% 78.5% 80.9% 81.5%Gemma-2-27B59.6% 68.5% 70.9% 74.3%37.6% 42.3% 51.5% 57.4%33.1% 45.4% 49.4% 50.3%76.3% 78.4% 82.1% 81.6%
+DeepSeek-V356.0% 68.0% 72.0% 73.4%37.6% 42.5% 50.7% 55.1%30.8% 43.4% 48.6% 49.7%75.7% 77.5% 78.6% 80.2%DeepSeek-R160.4% 71.7% 75.7% 75.2%40.8% 44.8% 56.8% 58.8%31.2% 45.3% 51.1% 51.6%77.1% 78.9% 80.3% 83.8%
+Claude-Sonnet† 54.5% 68.4% 70.7% 73.9%36.7% 41.1% 52.4% 55.2%31.6% 43.1% 48.9% 50.4%76.0% 78.4% 80.9% 80.8%ChatGPT‡ 62.0% 69.0% 72.1% 74.1%37.1% 42.7% 55.9% 54.5%32.0% 43.5% 48.0% 48.5%71.9% 73.2% 75.0% 75.3%GPT-4o⋆ 57.2% 69.2% 74.4% 75.4%37.5% 41.6% 53.1% 57.2%31.4% 43.3% 48.3% 49.2%76.6% 75.1% 78.8% 82.2%GPT-4.1§ 58.6% 70.8% 76.1% 76.4%35.1% 41.7% 55.6% 56.2%30.9% 45.4% 51.3% 50.4%75.2% 77.1% 76.4% 80.4%
+§BGE-Reranker-Large (550M). 3 Proprietary GTE-Reranker (7B). †241022 version. ‡240125 version. ⋆241120 version. §
+20250414 version.
+candidates that exceed this threshold. This thresh-
+old is slight different from b1, as the the addition of
+margin loss would widen the score distribution of
+valid samples. Notably, to ensure minimal context
+for generation, we retain at least 2 documents if
+fewer exceed the filtering threshold.
+4.2 Results
+We first present InfoGain-RAG’s performance with
+single retriever across different LLMs and bench-
+marks, comparing it with naive RAG and reranking
+approaches. We then show its effectiveness in mul-
+tiple retriever settings. Finally, we demonstrate
+our method’s advantages over self-reflection and
+retriever-optimization approaches.
+Comparison to Reranking approaches with Sin-
+gle Retriever. Table 1 compares InfoGain-RAG
+(355M) against naive RAG, BGE-Reranker (550M)
+and GTE-Reranker (7B, SOTA) across different
+models and datasets. As shown in the results,
+InfoGain-RAG substantially improves over naive
+RAG and BGE-Reranker, while surpassing the far
+larger GTE-Reranker in most cases. On TriviaQA,
+for instance, DeepSeek-V3 achieves 72.0% with
+GTE-Reranker and 73.4% with InfoGain-RAG,
+while Qwen2.5-72B reaches 76.3% with InfoGain-
+RAG, surpassing naive RAG by 16.4%, BGE-
+Reranker by 5.7%, and GTE-Reranker by 2.9%.
+Moveover, these improvements hold across both
+model scales and families - from smaller models
+like Qwen2.5-1.5B (+15.9% over naive RAG) to
+larger ones like LLaMA3.1-405B (+17.9%).
+Trained on TriviaQA, InfoGain-RAG demon-
+strates strong generalization ability across different
+datasets and tasks. It improves Qwen2.5-72B’s
+accuracy on NaturalQA by 17.8% and PopQA by
+Figure 3: Performance comparison of Qwen2.5-7B
+across different datasets with single retriever and multi-
+ple retrievers.
+17.4% over naive RAG, with particularly notable
+gains on FM2 from 73.6% to 83.4%.
+In particular, our reranker achieves these results
+with just 88K training samples and merely 355M
+parameters, compared to BGE-Reranker’s 300M
+samples and GTE-Reranker’s 7B parameters(see
+Appendix C for comparisons with the GTE family).
+Comparison to Reranking approaches with Mul-
+tiple Retrievers. InfoGain-RAG maintains con-
+sistent superiority with multiple retrievers. As
+shown in Figure 3, our reranker achieves the best
+performance on all four tasks. Specifically, it im-
+proves by 9.9% over BGE-Reranker on NaturalQA
+and by 4.9% over GTE-Reranker on PopQA. Ad-
+ditionally, we observe that all rerankers show im-
+provements in the multi-retriever setting compared
+to the single-retriever setting. Notably, our method
+achieves the largest performance gains (when com-
+paring multi-retriever to single-retriever settings)
+on most tasks, with an average improvement of
+3.8%. This clearly demonstrates the superior effec-
+tiveness of our reranker in multi-retriever scenarios.
+7196
+
+===== PAGE 8/15 =====
+Comparison with Self-Reflection and Retriever-
+Optimization approaches. As shown in Fig-
+ure 4, we evaluate InfoGain-RAG against two types
+of RAG approaches. For self-reflection, our ap-
+proach outperforms both Self-RAG(Asai et al.,
+2024) and CRAG(Yan et al., 2024). With LLaMA2-
+13B as the base model, InfoGain-RAG achieves
+76.2% accuracy on TriviaQA and 51.9% on Natu-
+ralQA, surpassing Self-RAG (69.3%, 49.5%) and
+CRAG (74.5%, 48.2%) while avoiding multiple
+LLM inference calls. For retriever-optimization,
+InfoGain-RAG shows substantial improvements
+using LLaMA-65B, reaching 78.2% on TriviaQA
+and 54.3% on NaturalQA. This outperforms both
+RePlug(Shi et al., 2023) (74.9%, 42.3%) and RA-
+DIT(Lin et al., 2023) (75.1%, 43.9%).
+Figure 4: Performance Comparison with self-reflection
+(7B, 13B) and retriever-optimization (65B) approaches
+on TriviaQA (a) and NaturalQA (b). We strictly fol-
+lowed the experimental settings of each baseline ap-
+proach for fair comparison.
+4.3 Ablation Study
+In this section, we conduct comprehensive abla-
+tion studies to systematically evaluate the critical
+components across InfoGain-RAG: 1) examining
+whether using different base models to generate
+DIG data will affect the final effect, 2) verifying
+whether the multi-task learning strategy can bring
+greater improvement compared to each individual
+task, and 3) assessing the impact of document fil-
+tering during inference.
+LLM-agnostic DIG-data Collection. Table 2
+demonstrates that InfoGain-RAG’s performance re-
+mains consistent regardless of which LLM is used
+for DIG data collection. Despite the changes in
+the DIG scores of each model due to factors such
+as structure and size, the trained reranker achieves
+similar accuracy on TriviaQA. This performance
+shows that InfoGain-RAG can identify the intrinsic
+query-document correlations independent of the
+LLM used for data collection, validating its robust-
+ness as a general framework.
+Table 2: Compared results of rerankers trained using
+DIG scores from different base LLMs on TriviaQA.
+Model RAG Ours
+(DIG-Qwen)
+Ours
+(DIG-LLaMA)
+Qwen2.5-7B 52.9% 72.1% 68.8%
+Qwen2.5-14B 56.1% 72.9% 74.2%
+Qwen2.5-72B 59.9% 76.3% 75.0%
+LLaMA3.1-8B 55.1% 70.4% 72.1%
+LLaMA3.1-70B 54.5% 71.3% 70.2%
+LLaMA3.1-405B 56.7% 74.6% 73.0%
+Single or Multi-task Reranker Training. Ta-
+ble 3 compares the performance differences of sin-
+gle CE or Margin task to the multi-task training.
+We can see that the combined strategy consistently
+outperforms individual loss across two types of
+models. For example, Qwen2.5-72B can get an
+accuracy of 76.8% with the multi-task training on
+TriviaQA, but only 73.0% for CE and 71.4% for
+margin loss. The large improvement demonstrates
+that the absolute relevance judgments can be com-
+bined with the relative rankings to achieve more
+robust document selection.
+Table 3: Performance differences of single CE or Mar-
+gin task to the multi-task training across models. The
+testings is conducted on TriviaQA.
+Model Ours
+(CE loss)
+Ours
+(Margin loss)
+Ours
+(Multi-loss)
+Qwen2.5-7B 67.6% 68.2% 71.8%
+Qwen2.5-14B 70.1% 67.9% 72.7%
+Qwen2.5-72B 73.0% 71.4% 76.8%
+LLaMA3.1-8B 68.2% 65.3% 70.7%
+LLaMA3.1-70B 69.5% 67.1% 71.4%
+LLaMA3.1-405B 73.6% 70.8% 74.2%
+Document Filtering during Inference. In ta-
+ble 4 we test the effectiveness of document filtering
+during inference with the threshold of 0.2. Here,
+non-filtering means all retrieved documents are
+ranked without being filtered. It can be observed
+that performances are better with filtering than non-
+filtering. For instance, Qwen2.5-72B improves
+from 73.6% to 76.8%, and LLaMA3.1-405B gains
+from 71.2% to 74.6%. These observations jointly
+confirm that identifying and removing potentially
+noisy contents is beneficial for final performance.
+5 Conclusion
+In this paper, we present a novel framework
+InfoGain-RAG to address the critical challenge of
+RAG about filtering out semantically misaligned
+7197
+
+===== PAGE 14/15 =====
+B Mathematical Derivations
+In this section, we provide detailed mathematical
+derivations for two key components of margin loss:
+(1) how LogSumExp (LSE) function approximates
+the maximum function, and (2) the complete deriva-
+tion steps of our margin loss formulation based on
+LSE.
+B.1 LSE Approximation of Maximum
+Function
+The LogSumExp function is defined as:
+LSE(x1,...,x n) = log(
+n∑
+i=1
+exp(xi)) (10)
+First, we prove that LSE provides an upper bound
+for the maximum function. For any i:
+LSE(x1,...,x n) = log
+( n∑
+j=1
+exp(xj)
+)
+≥log(exp(xi))
+= xi
+(11)
+Since this holds for all i, we have:
+LSE(x1,...,x n) ≥max(x1,...,x n) (12)
+Let x∗= max(x1,...,x n). We can rewrite LSE
+as:
+LSE(x1,...,x n) = log
+( n∑
+i=1
+exp(xi)
+)
+= log
+(
+exp(x∗)
+n∑
+i=1
+exp(xi −x∗)
+)
+= x∗+ log
+
+1 +
+∑
+i:xi̸=x∗
+exp(xi −x∗)
+
+
+(13)
+Since xi −x∗≤0 for all i(with equality only
+when xi = x∗), and typically xi −x∗ ≪0 for
+xi ̸= x∗, we have:
+exp(xi −x∗) →0 when xi −x∗≪0 (14)
+Therefore:
+log(1 +
+∑
+i:xi̸=x∗
+exp(xi −x∗)) →0 (15)
+This yields our final approximation:
+LSE(x1,...,x n) ≈x∗= max(x1,...,x n) (16)
+The approximation becomes more accurate as
+the differences between the maximum value and
+other values increase.
+B.2 Derivation of Margin Loss
+Starting from the initial margin loss formulation:
+LMargin ≈[LSE(γ(sn)) −(−LSE(−γ(sp)))]+ (17)
+We can expand this expression:
+[LSE(γ(sn)) −(−NLSE (γ(sp)))]+
+=
+[
+log
+L∑
+j=1
+exp
+(
+γ
+(
+sj
+n
+))
++ log
+K∑
+i=1
+exp
+(
+γ
+(
+−si
+p
+))]
++
+=
+[
+log
+( L∑
+j=1
+exp
+(
+γ
+(
+sj
+n
+))K∑
+i=1
+exp
+(
+γ
+(
+−si
+p
+)))]
++
+=
+[
+log
+K∑
+i=1
+L∑
+j=1
+exp
+(
+γ
+(
+sj
+n −si
+p
+))]
++
+(18)
+Finally, using the softplus function to smooth
+the ReLU operation:
+LMargin ≈log
+[
+1 +
+K∑
+i=1
+L∑
+j=1
+exp
+(
+γ
+(
+sj
+n −si
+p
+))]
+(19)
+This completes the derivation of our margin loss
+formulation.
+C Comparisons with GTE Family
+Table 5: Comparative analysis of InfoGain-RAG and
+various GTE models as rerankers, with Qwen2.5 as the
+answer generation model on TriviaQA. Results demon-
+strate InfoGain-RAG’s superior performance across all
+tested configurations.
+Method GTE-1.5B GTE-7B GTE-Proprietary InfoGain-RAG
+Qwen2.5-0.5B 45.3% 46.5% 49.5% 55.8%
+Qwen2.5-1.5B 59.7% 61.7% 63.3% 66.3%
+Qwen2.5-3B 63.3% 65.6% 65.8% 68.2%
+Qwen2.5-7B 67.4% 69.2% 69.5% 72.1%
+Qwen2.5-14B 67.5% 70.5% 71.1% 72.9%
+Qwen2.5-32B 70.1% 71.9% 72.0% 74.7%
+Qwen2.5-72B 69.2% 72.2% 73.4% 76.3%
+D Information of Datasets
+TriviaQA1 consists of 174,000 questions based on
+Wikipedia pages, with answers and their justifica-
+tions also determined from Wikipedia, including
+138,000 for the training set, 17,900 for the valida-
+tion set, and 17,200 for the test set. NaturalQA 2
+is a dataset consists of 307,373 training questions,
+7,830 validation questions, and 7,842 test questions.
+1https://huggingface.co/datasets/mandarjoshi/
+trivia_qa
+2https://huggingface.co/datasets/
+sentence-transformers/natural-questions
+7203
+
+===== PAGE 15/15 =====
+where all questions originate from Google’s search
+records, with answers derived from Wikipedia.
+PopQA3 contains approximately 14,000 questions
+all sourced from the Wikidata database. PopQA
+focuses on long-tail entities and can effectively as-
+sess how well a LLM can grasp infrequent factual
+knowledge.
+FM24 is a dataset that contains 10,400 training
+questions, 1,170 validation questions and 1,380
+test questions, which are designed to test the abil-
+ity of LLMs to answer simple, factual questions.
+These questions cover a wide range of topics and
+are collected from various online sources. The an-
+swers to these questions are also provided, making
+it a valuable resource for training and evaluating
+question-answering systems.
+The December 2018 Wikipedia dump is a com-
+prehensive collection of the content available on
+Wikipedia up to December 2018. This dump in-
+cludes nearly 23 millions articles, discussions, and
+metadata, providing a vast amount of information
+on a diverse range of topics. It is a valuable re-
+source for natural language processing tasks, such
+as information extraction, text summarization, and
+question answering. Researchers and developers
+can use this dump to train and test their models on a
+large and diverse corpus of text, helping to improve
+the performance and accuracy of their systems.
+E MRR Evaluation Results
+In addition to the Exact Match accuracy reported
+above, we also evaluate the ranking performance of
+different reranking approaches using Mean Recip-
+rocal Rank (MRR@10). MRR measures the quality
+of the ranking by considering the position of the
+first relevant document, providing complementary
+insights into the effectiveness of each method.
+Table 6: Ranking performance comparison using
+MRR@10 across datasets.
+Method BGE(550M) GTE(7B) InfoGain-RAG(355M)
+TriviaQA 0.6486 0.7236 0.7294
+NaturalQA 0.4365 0.6136 0.6312
+As shown in Table 6, InfoGain-RAG achieves
+the highest MRR@10 scores across both datasets,
+consistent with our main findings. On Trivi-
+3https://huggingface.co/datasets/akariasai/
+PopQA
+4https://huggingface.co/datasets/tasksource/
+fool-me-twice/viewer
+aQA, InfoGain-RAG (0.7294) outperforms GTE-
+7B (0.7236) and shows significant improvement
+over BGE-Reranker (0.6486). Similarly, on Natu-
+ralQA, our method (0.6312) surpasses both GTE-
+7B (0.6136) and BGE-Reranker (0.4365). These
+results validate that InfoGain-RAG not only im-
+proves final answer quality but also provides better
+document ranking.
+7204

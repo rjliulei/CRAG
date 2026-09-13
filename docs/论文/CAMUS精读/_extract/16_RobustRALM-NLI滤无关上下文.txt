@@ -1,0 +1,519 @@
+
+===== PAGE 1/22 =====
+Published as a conference paper at ICLR 2024
+MAKING RETRIEVAL -AUGMENTED LANGUAGE
+MODELS ROBUST TO IRRELEVANT CONTEXT
+Ori Yoran1 Tomer Wolfson1,2 Ori Ram1 Jonathan Berant1
+1Tel Aviv University, 2Allen Institute for AI
+{ori.yoran, ori.ram, joberant}@cs.tau.ac.il tomerw@allenai.org
+ABSTRACT
+Retrieval-augmented language models (RALMs) hold promise to produce lan-
+guage understanding systems that are are factual, efficient, and up-to-date. An
+important desideratum of RALMs, is that retrieved information helps model per-
+formance when it is relevant, and does not harm performance when it is not. This
+is particularly important in multi-hop reasoning scenarios, where misuse of irrele-
+vant evidence can lead to cascading errors. However, recent work has shown that
+retrieval augmentation can sometimes have a negative effect on performance. In
+this work, we present a thorough analysis on five open-domain question answer-
+ing benchmarks, characterizing cases when retrieval reduces accuracy. We then
+propose two methods to mitigate this issue. First, a simple baseline that filters out
+retrieved passages that do not entail question-answer pairs according to a natural
+language inference (NLI) model. This is effective in preventing performance re-
+duction, but at a cost of also discarding relevant passages. Thus, we propose a
+method for automatically generating data to fine-tune the language model to prop-
+erly leverage retrieved passages, including for challenging multi-hop tasks, using
+a mix of relevant and irrelevant contexts at training time. We empirically show that
+even 1,000 examples suffice to train the model to be robust to irrelevant contexts
+while maintaining high performance on examples with relevant ones.
+1 I NTRODUCTION
+Large Language Models (LLMs) (Brown et al., 2020; Chowdhery et al., 2022; Touvron et al., 2023)
+are the foundation on top of which modern language systems are built. However, open-domain
+question answering (ODQA; Chen et al. 2017) and other knowledge-intensive tasks (Thorne et al.,
+2018; Petroni et al., 2021) require vast amounts of up-to-date factual knowledge about rare entities
+that even very large models cannot memorize (Roberts et al., 2020; Dhingra et al., 2022). A domi-
+nant approach for combating this issue has been Retrieval Augmented Language Models (RALMs),
+which incorporate a retrieval mechanism to reduce the need for storing information in the LLM
+parameters (Guu et al., 2020; Lewis et al., 2020b; Izacard et al., 2023; Rubin & Berant, 2023). Fur-
+thermore, RALMs have also been shown to improve ODQA performance in an in-context setting
+(without any training), simply by prepending retrieved sentences to the input question (Ram et al.,
+2023). Nevertheless, retrievers are not perfect and past work has shown that noisy retrieval can
+negatively affect LLM performance (Petroni et al., 2020; Li et al., 2023). For example, in Fig. 1,
+when posed with the questions “Who is playing Jason on General Hospital?” a vanilla LLM (left)
+correctly answers the question while the RALM (right) is “distracted” by irrelevant context about
+the actor portraying Cooper, not Jason.
+In this work, we analyze and improve the robustness of RALMs to noisy retrieved contexts. Our def-
+inition for retrieval-robust LLMsstates that: (a) when relevant, the retrieved context should improve
+model performance; (b) when irrelevant, the retrieved context should not hurt model performance.
+To this end, we present two methods for retrieval-robustness in RALMs (§2).
+First, we consider a setting where we have black-box access to the LLM and cannot train it. Rather
+than solely relying on in-context prompting (Brown et al., 2020), we frame retrieval robustness as
+a natural language inference (NLI) problem (Dagan et al., 2006; Bowman et al., 2015). Namely,
+given a question and retrieved context, an NLI model can predict whether a question-answer pair
+1
+arXiv:2310.01558v2  [cs.CL]  5 May 2024
+
+===== PAGE 2/22 =====
+Published as a conference paper at ICLR 2024
+The answer is: Steve Burton
+Q: Who is the actor playing Jason on general hospital?
+E: Jason Gerhardt (born April 21, 1974) is an American actor. He is known for playing the role of Cooper Barrett in General Hospital and Zack Kilmer in Mistresses. The answer is: Jason Gerhardt
+Large Language Model (no retrieval)Retrieval Augmented Language Model
+Figure 1: An example from NQ where retrieval augmentation causesLlama-2-13B to err. Augment-
+ing with irrelevant retrieved context leads to an error (right), although the model is able to answer
+the question without retrieval (left).
+(hypothesis) is entailed by the context (premise). Building on the strong performance of recent
+NLI models (e.g., in detecting model hallucinations (Honovich et al., 2022) and attributed question
+answering (Bohnet et al., 2023)), we use such models to identify irrelevant contexts. When the
+context is labeled as irrelevant to the question-answer pair, we generate the answer using the LLM
+without retrieval as a “back-off strategy”. Our results show that this natural baseline is highly
+effective at identifying irrelevant contexts, but is too strict and discards relevant ones as well (§4).
+We then propose a method for training RALMs to be retrieval-robust. Intuitively, LLMs are not
+trained with retrieved passages, and thus brittleness to noisy retrieval is somewhat expected. There-
+fore, we perform an additional finetuning step that teaches the LLM to be robust to noisy contexts.
+The core challenge is to generate data for finetuning, and we describe a procedure for automatically
+generating such data for both single-hop and multi-hop questions. In the single-hop setting, assum-
+ing access to gold QA pairs and a retriever, we create training examples using retrieved contexts,
+where we can use low-ranked or random passages as noisy contexts. In the multi-hop setting, train-
+ing examples need to contain not only retrieved contexts, but also intermediate questions, answers
+and relevant contexts, which comprise the question decomposition (Fig. 3), shown to be necessary
+for high performance on multi-hop questions (Wolfson et al., 2020; Press et al., 2023). To generate
+decompositions to train on, we use a strong LLM, prompted for decomposition without any re-
+trieval. Then, we can sample multiple decompositions, and use self-consistency (Wang et al., 2023)
+to identify high-quality training examples (§3.2.3).
+To test our methods, we evaluate retrieval robustness on five ODQA benchmarks, four of which
+contain multi-hop questions, where the retriever is called multiple times (Jiang et al., 2023). Fig. 2
+shows that even with a strong retriever (top-1 Google search) incorporating the retrieved context ac-
+tually hurts model performance on two of the benchmarks (STRATEGY QA and F ERMI ). Moreover,
+adding randomly-retrieved contexts dramatically decreases accuracy on all five datasets. Our analy-
+sis (§5) shows that irrelevant context causes a wide range of errors, which include copying irrelevant
+answers from the retrieved sentences and hallucinating incorrect answers and decompositions.
+Our results demonstrate that finetuning LLMs to be retrieval-robust enables them to ignore irrelevant
+context while improving their overall accuracy (§4). When using a strong retriever at test time, our
+finetuned models outperform both models that were finetuned without retrieval, as well as untrained
+models prompted using in-context learning. To test robustness to noisy context, we evaluate QA
+accuracy when models are given randomly-retrieved contexts. In this setting, our finetuned models
+perform on par with those that were finetuned without retrieval, demonstrating retrieval robustness.
+In addition, our ablation study shows that training models on a mixture of relevant and irrelevant
+contexts results in models that are much more robust to irrelevant context.
+To summarize, our main contributions are:
+• We conduct a thorough analysis on the robustness of RALMs to irrelevant retrieved contexts.
+• We show that small NLI models can be used to identify irrelevant context and improve robustness,
+without updating the model parameters.
+• We demonstrate that training LLMs when to use retrieval helps make models robust to irrelevant
+context and improve their overall performance, including in challenging multi-hop tasks.1
+1Our code, data, and models are available at https://github.com/oriyor/ret-robust.
+2
+
+===== PAGE 3/22 =====
+Published as a conference paper at ICLR 2024
+0
+20
+40
+60
+80
+NQ
+(Single-hop)
+Bamboogle
+(Explicit Multi-hop)
+2WikiMQA
+(Explicit Multi-hop)
+StrategyQA
+(Implicit Multi-hop)
+Fermi
+(Implicit Multi-hop)
+No Retrieval RALM (Top-1 Retrieval) RALM (Random Retrieval)
+Figure 2: Accuracy for Llama-2-13B few-shot prompted on five QA tasks, in three settings: (a)
+without retrieval, (b) with top-1 retrieval from a strong search engine, and (c) with a randomly-
+retrieved passage. Retrieval augmentation can boost performance, but even strong retrieval hurts
+performance on StrategyQA and Fermi, and random contexts reduce performance dramatically.
+2 M AKING RALM S ROBUST TO IRRELEVANT CONTEXTS
+We now present our methods for building RALMs that are robust to irrelevant contexts. We begin
+by describing the common approach for incorporating evidence into RALMs. Next, we explore
+a natural baseline for using an NLI model to identify irrelevant contexts. Last, we describe our
+procedure for finetuning models to be robust to irrelevant context.
+In-context RALMs Language models define a probability distribution over sequences of to-
+kens, with auto-regressive models assigning a probability via next-token prediction: pLM =
+Πn
+i=1pθ(xi|x<i), where x<i is the sequence of tokens preceding xi at each step and θ denotes
+the parameters of the LM. For RALMs, we follow the definition of in-context RALMs from Ram
+et al. (2023), where context sentences are retrieved from a corpus C, and generation is con-
+ditioned on the retrieved context. Given the retrieval operation RC, this can be formalized as
+pRALM = Π n
+i=1pθ(xi|RC(x<i); x<i), where [RC(x<i); x<i] denotes the concatenation of the re-
+trieved evidence with the generated sequence. Generation in LMs and RALMs can also be condi-
+tioned on additional input, which we omit for brevity.
+In our setting, we focus on RALMs for ODQA. We follow recent approaches such as Self-Ask and
+IR-CoT (Press et al., 2023; Trivedi et al., 2023; Yoran et al., 2023), for interleaving retrieval with
+multi-hop question answering (see Fig. 3). Retrieval is performed for every intermediate question
+and each context is prepended to the question. In the single-hop setting, the model has to generate
+the answer given a question and retrieved context. In the multi-hop setting, the model has to generate
+intermediate questions and answers until arriving at the final answer and the retriever is called for
+the original question and after each intermediate question. Formally, x in this case is the generated
+decomposition until an intermediate step andRC(x) are the retrieved contexts for all questions inx.
+2.1 I DENTIFYING IRRELEVANT CONTEXTS WITH NLI MODELS .
+NLI models (Dagan et al., 2006; Bowman et al., 2015) classify whether a textual hypothesis is
+entailed, neutral, or contradicted given a textualpremise. Recent work successfully used NLI models
+to automatically identify hallucinations (Honovich et al., 2022) and statement attribution (Bohnet
+et al., 2023) when presented with a context and generated text. Similarly, a natural baseline is to
+frame irrelevant context identification as an NLI problem, by using the retrieved context only when
+the hypothesis (i.e., final answer and intermediate question-answer pairs; Fig. 3) are classified as
+entailed by the premise (i.e., the retrieved context). We use a simple back-off strategy where we
+generate twice, once with pLM and once with pRALM , and only use the RALM if the NLI model
+classified all generated answers (and intermediate questions) as entailed by the retrieved evidence.
+3
+
+===== PAGE 4/22 =====
+Published as a conference paper at ICLR 2024
+Is it true that Colonel Walter Phelps served the United States Army for more than 30 years?
+Q1: Who is Colonel Walter Phelps?
+E1: Walter Phelps: (Oct 29, 1832–February 20, 1878) was an officer in the Union Army throughout the American Civil War, serving as commanding officer of the Eastern Iron Brigade.
+E1: Walter Phelps: (Oct 29, 1832–February 20, 1878) was an officer…Q1: Who is Colonel Walter Phelps?A1: Colonel Walter Phelps was an officer in the Union Army throughout the American Civil War.
+Retrieval step #1
+Decomposition ans. #1 
+Decomposition step #1A1: Colonel Walter Phelps was an officer in the ...Q2: How long did Colonel Walter Phelps serve the United States Army?
+E2: Walter Phelps: [['Walter Phelps Jr.'], ['Allegiance', 'United States of America Union'], ['Service/branch', 'United States Army Union Army'], ['Years of service', '1861-1865'], ['Rank', 'Colonel Bvt. Brigadier General']]
+...A1: Colonel Walter …Q2: How long did Colonel Walter Phelps serve the United States Army?A2: Colonel Walter Phelps served the United States Army for 4 years.
+Retrieval step #1
+Decomposition ans. #2 
+Decomposition step #2Final answer.The final answer is:No.
+Figure 3: Interleaving decomposition and retrieval in Self-Ask format (Press et al., 2023). The model
+generates intermediate questions and answers until generating the final answer (model generations
+are shown in pink). Retrieved evidence for intermediate questions is prepended at each step.
+For example, in Fig. 1, the retrieved evidence “Jason Gerhardt... is an American actor... known
+for playing Cooper Barrett... ”serves as the premise while the question and generated answer, “Q:
+Who is the actor playing Jason on general hospital? A: Steve Burton” are concatenated and serve
+as our hypothesis. As this context is irrelevant, we expect the NLI model to label the hypothesis as
+contradicting. Given a contradicting or neutral hypothesis, we will use the standard LLM without
+the (potentially distracting) retrieved context. For multi-hop questions (as in Fig. 3), we additionally
+verify that each intermediate-answer pair is entailed by the retrieved evidence using all retrieved
+evidence as our premise and the intermediate question-answer pair as the hypothesis. For example,
+“Q: Who is Colonel Walter Phelps? A: Colonel Walter Phelps was an officer in the Union Army
+throughout the American Civil War. ”for the first intermediate question in Fig. 3.
+2.2 T RAINING ROBUST RALM S
+As in-context RALMs are not trained to use retrieved passages, a more effective solution than post-
+hoc filtering (using NLI) may be to train RALMs to ignore irrelevant contexts. We are interested in
+testing whether training on a relatively small dataset (several hundreds of examples) would suffice.
+Automatically Generating Training DataOur goal is to teach RALMs to be robust to irrelevant
+context in an ODQA setting. In the single-hop setting, generating training data is straightforward.
+Given access to a dataset of question-answer pairs {(q, a)} (i.e., without contexts) and a retriever
+RC, we use the retriever to augment questions with retrieved context. To create training examples
+with relevant contexts, we return the top-1 context from RC, and for irrelevant contexts, we either
+return a low-ranked result from RC(q) or a random context (i.e., RC(q′) for another question q′).
+We denote the chosen context by rq. Then, the training dataset is defined by D = {([rq; q], a)}.
+Our main challenge is generating training examples for multi-hop questions. In these questions the
+model generates a decomposition, consisting of intermediate questions and answers, before arriving
+at the final answer, while the retriever is called multiple times (Fig. 3). Our goal is to automatically
+generate retrieval-augmented decomposition steps, D = {([rx; x], y)}, where: y is the correct gen-
+eration for each step (i.e., the correct intermediate question, intermediate answer, or final answer);
+x consists of the previously generated steps up to y; rx is the retrieved contexts for all steps in x.
+Our first step to automatically generate decompositions is to prompt a strong LLM without access to
+retrieval and to verify its answers. However, the LLM may arrive at the correct answer using an in-
+correct decomposition, for example in binary or comparison questions. Hence, we need to ensure the
+quality of generated decompositions. For multi-hop datasets which provide intermediate answers,
+we simply filter out generated decompositions that do not contain them. When intermediate answer
+annotations are unavailable, we sample from the LLM that generated the decomposition multiple
+times and verify self-consistency (Wang et al., 2023). Further details are given in §3.2.3.
+4
+
+===== PAGE 5/22 =====
+Published as a conference paper at ICLR 2024
+Dataset Type Example
+NQ Single-hop What episode of law and order svu is mike tyson in?
+2WIKI MQA Explicit Where was the place of death of Isabella Of Bourbon’s father?
+BAMBOOGLE Explicit What is the maximum airspeed (in km/h) of the third fastest bird?
+STRATEGY QA Implicit Can Arnold Schwarzenegger deadlift an adult Black rhinoceros?
+FERMI Implicit How many high fives has Lebron James given/received?
+Table 1: The QA datasets in our experiments.
+Training We use our automatically generated data D to fine-tune models for generating y condi-
+tioned on [rx; x] with standard maximum likelihood. Since we are mostly interested in the low-data
+regime, we limit the number of questions in D to 1,000 in the single-hop setting and 500 in the
+multi-hop setting (splitting multi-hop questions to multiple examples for each step), and use param-
+eter efficient fine-tuning (Dettmers et al., 2023). Thus, training all our models takes no more than a
+few hours. Additional experimental details are in §3 and §A.1.
+3 E XPERIMENTAL SETTING
+3.1 D ATASETS
+We experiment with both single- and multi-hop QA datasets. We list and give an example from each
+dataset in Tab. 1. Our QA benchmarks can be categorized based on their required reasoning skills:
+• Single-hop: Information-seeking questions that do not require decomposition. We use the popular
+Natural Questions (NQ) dataset (Kwiatkowski et al., 2019).
+• Explicit Reasoning:Multi-hop questions where reasoning is explicitly expressed in the question.
+We include 2WIKI MQA (Welbl et al., 2018) and BAMBOOGLE (Press et al., 2023).
+• Implicit Reasoning: Mutli-hop questions where generating reasoning steps requires common-
+sense (implicit reasoning, Geva et al. (2021)). Such questions may have multiple valid reasoning
+chains. We evaluate on STRATEGY QA (Geva et al., 2021) and FERMI (Kalyan et al., 2021).
+For evaluation, we follow prior work and use EM for NQ and S TRATEGY QA, and F 1 for
+2WIKI MQA and B AMBOOGLE . For F ERMI , we use the official order-of-magnitude evaluation (
+Kalyan et al. 2021). Following prior work (Khattab et al., 2022; Trivedi et al., 2023; Yoran et al.,
+2023), we evaluate on 500 random examples from the development set of each dataset. We provide
+additional technical details on evaluation in §A.2.
+3.2 M ODELS
+We next describe our retrievers (§3.2.1), prompted baselines (§3.2.2), and finetuned models (§3.2.3).
+3.2.1 R ETRIEVERS
+Our models use a retriever based on GOOGLE SEARCH ,2 as well as the open-source COLBERTV2
+(Khattab & Zaharia, 2020). Since the corpus for our datasets is Wikipedia, we format search queries
+as “en.wikipedia.org qi” when accessing GOOGLE SEARCH . For COLBERTV2 our corpus
+is the 2018 Wikipedia from Karpukhin et al. (2020). To simulate different types of noise, we return
+either the top-1, a low-ranked relevant evidence,3 or a random passage that is the top-1 evidence for
+a different question or intermediate question from the same dataset.
+2We query Google search via the SerpAPI service: https://serpapi.com/.
+3For GOOGLE SEARCH , we use the lowest returned result from the API, which is at rank 9.3 on average.
+For COLBERTV2 we only experiment with top-1 results.
+5
+
+===== PAGE 6/22 =====
+Published as a conference paper at ICLR 2024
+3.2.2 F EW-SHOT PROMPTED BASELINES
+Our main baselines are Llama-2-13B models prompted for QA in the Self-Ask format through in-
+context learning (Brown et al., 2020) with 4-6 exemplars. We also evaluate with Llama-2-70B on
+NQ. Our baselines differ based on the retrieved contexts in the exemplars (Full prompts in §A.5):
+• Self-Ask No Retrieval (SA-NR):Exemplars are gold decompositions without retrieved evidence.
+We use this prompt to evaluate the performance of models without retrieval, when relying solely on
+their parametric memory, i.e, the information encoded in the model’s parameters. As an additional
+baseline, we use this non-retrieval prompt, but still apply retrieval during inference.
+• Self-Ask Retrieval@1 (SA-R@1):Exemplars are gold decomopsitions prepended with the most
+relevant evidence retrieved from GOOGLE SEARCH for each step.
+• Self-Ask Retrieval@10 (SA-R@10): Exemplars are gold decomopsitions prepended with the
+lowest rank passage from Google (which is rank 10 in most cases).
+• Self-Ask Random Retrieval (SA-RMix)Exemplars are gold decomopsitions prepended with
+either the top-1 or lowest-ranked evidence from GOOGLE SEARCH , interchangeably.
+NLI-based Models We use a BART-Large model (Lewis et al., 2020a) with 407 million param-
+eters trained on the MNLI dataset (Williams et al., 2018). 4 We consider a question-answer pair as
+entailed if the probability for the entailment label is ≥ 0.5. All few-shot prompted baselines have a
+variant with NLI, termed, SA-*-NLI. When there is no entailment, we use the generation from the
+SA-NR model, which uses only the parametric memory as the back-off strategy.
+3.2.3 F INE -TUNED MODELS
+We finetune Llama-2-13B on 3 ODQA benchmarks, one single-hop (NQ, 1000 training examples),
+one explicit (2W IKI MQA, 500 questions, 1,539 examples), and one implicit (S TRATEGY QA, 414
+questions, 1,584 examples). Training hyperparameters are in §A.1.
+Data Generation We use a LLM to verify questions are answerable and to generate decompo-
+sitions.5 This is done with GPT-3, code-davinci-002 (Brown et al., 2020; Chen et al., 2021) with
+175B parameters. We prompt the model to generate decompositions using the SA-NR prompt.
+2WIKI MQA contains intermediate answers, and we use those to verify generated decompositions.
+For the implicit S TRATEGY QA we utilize only the final answer, and thus use self-consistency, as
+explained in §2. We sample 5 decompositions per question (one with greedy decoding and four
+with temperature 0.7) and only keep the greedily-decoded decomposition when all decompositions
+lead to the same correct answer. To verify the quality of the generated decompositions, we manu-
+ally examine 50 decompositions per dataset and find that the generated decompositions are correct
+in about 90% of the time for S TRATEGY QA and more than 95% for 2W IKI MQA. As F ERMI and
+BAMBOOGLE contain less than 300 examples, we use them exclusively for evaluation and do not
+include them in these experiments.
+Incorporating Retrieved Evidence in Training ExamplesTo make sure the model is exposed to
+relevant and irrelevant context, we use either the top-1, low-ranked, or random evidence with equal
+probability at each step. We term the trained model SA-RetRobust. We include ablations where
+training is without retrieved context (SA-NoRet) or only with the top-1 evidence (SA-Ret@1).
+4 R ESULTS
+Fig. 4 presents our main results, evaluating the effect that retrieving top-1 result from G OOGLE
+SEARCH has on the following RALMs: (a) an In-Context RALM, prompted with the SA-RMix
+prompt (leftmost yellow), (b) the same model, but using NLI models to identify irrelevant context
+(center, green), and (c) our proposed SA-RetRobust, a RALM fine-tuned on a mixture of relevant
+4We use the model from https://huggingface.co/facebook/bart-large-mnli.
+5To not train our models to hallucinate, we also filter single-hop questions where code-davinci-002 fails to
+generate the correct answer. However, we do not fully guarantee that the gold answer appears in the retrieved
+context or encoded in parameters of the model being trained.
+6
+
+===== PAGE 7/22 =====
+Published as a conference paper at ICLR 2024
+-10
+0
+10
+20
+30
+40
+NQ (29.6)2WikiMQA (32.0)StrategyQA (65.6)Bamboogle (47.4)Fermi (27.7)
+In-Context RALM In-Context RALM + NLITrained RALM (RetRobust)
+Datasets with training dataDatasets withouttraining data
+Figure 4: Results for our models on all evaluation datasets when retrieving top-1 results from
+GOOGLE SEARCH . Bars show the difference in performance from a model with no retrieval
+(whose performance is given in parenthesis for each dataset). Prompting models to use retrieval
+in-context (leftmost bar) increases performance on single-hop and explicit datasets, but decreases
+performance on implicit ones (S TRATEGY QA and F ERMI ). When using NLI models to identify
+irrelevant evidence (center bar), retrieval never hurts, at a cost to gains received when retrieval is
+helpful. Our trained RALMs (rightmost column) outperform all other models when applicable for
+NQ, 2W IKI MQA, and S TRATEGY QA (see §3.2.3 for more details on data generation).
+and irrelevant contexts (rightmost, orange). The bars show the difference in performance from
+our few-shot prompted model without retrieval (whose performance is shown in parenthesis for
+each dataset). For the In-Context RALM, we observe that retrieval helps on NQ, 2W IKI MQA and
+BAMBOOGLE but reduces performance on the implicit S TRATEGY QA and F ERMI . Adding NLI to
+identify irrelevant context ensures that retrieval does not hurt, but gains are limited. Training with
+retrieval leads to gains across the board. We observe similar trends with the COLBERTV2 retriever,
+albeit at an overall decrease in accuracy (§A.3, Tab. 3.)
+Exploring the Robustness of Models to Irrelevant ContextFig. 5 present results when simu-
+lating retrieval of irrelevant/noisy context, either by retrieving low-ranked passages (top) or random
+ones (bottom). When retrieving random passages, the performance of the In-Context RALM drops
+by more than 10 points on average, a phenomenon that can be mitigated by using NLI models. SA-
+RetRobust performs best across all settings. To verify that these improvements indeed stem from
+robustness to irrelevant context rather than task-specific training, we compare SA-RetRobust to an
+ablated variant trained and evaluated without retrieval (full results in Tab. 4, §A.3). SA-RetRobust
+is able to perform similarly to this model (within one standard deviation) when retrieving random
+contexts. Interestingly, when retrieving low-ranked results, SA-RetRobust outperforms the ablated
+model by 3.8 and 2.8 points on NQ and 2W IKI MQA, while performing only slightly worse (within
+a 1.2 point difference) on STRATEGY QA. Overall, our results suggest SA-RetRobust learned to both
+better utilize retrieval and ignore irrelevant context.
+Adding Retrieval to In-context Exemplars can Hurt PerformanceTab. 2 and Tab. 3 in §A.3
+present full results with the G OOGLE SEARCH and C OLBERTV2 retrievers. Interestingly, pro-
+viding exemplars with retrieval performs worse than providing exemplars without retrieval, i.e.,
+the SA-NR prompt leads to better performance even when retrieval is performed at inference time.
+This SA-NR prompt consistently outperforms the prompts with retrieval (SA-R@1, SA-R@10, and
+SA-RMix) when retrieving the top-1 result from C OLBERTV2 or random contexts from G OOGLE
+SEARCH . In addition, the SA-R@1 model that contains top-1 results in the prompt is not the best
+performing even when retrieving top-1 results at inference time, losing to SA-NR by more than 2
+points on average across datasets. When retrieving noisy contexts at inference time, SA-R@1 is
+outperformed by the other models, suggesting that showing examples for retrieval during in-context
+learning has a negative effect that causesover-utilization of irrelevant context. We observe a similar
+trend with Llama-2-70B in §A.3, Tab. 6.
+Effect of NLI When retrieving random contexts or evaluating on the implicit STRATEGY QA and
+FERMI , NLI variants consistently perform best, suggesting small NLI models are sufficient to iden-
+tify irrelevant evidence (Tab. 2 and Tab. 3 in §A.3). However, they reduce performance in cases
+7
+
+===== PAGE 8/22 =====
+Published as a conference paper at ICLR 2024
+-25
+-15
+-5
+5
+15
+NQ (29.6)2WikiMQA (32.0)StrategyQA (65.6)Bamboogle (47.4)Fermi (27.7)
+In-Context RALM In-Context RALM + NLITrained RALM (RetRobust)
+-25
+-15
+-5
+5
+15
+NQ (29.6)2WikiMQA (32.0)StrategyQA (65.6)Bamboogle (47.4)Fermi (27.7)
+In-Context RALM In-Context RALM + NLITrained RALM (RetRobust)
+Datasets with training dataDatasets without training data
+Figure 5: Results with low-rank (top) and random retrieval (bottom). Models are similar to those
+in Fig.4. Performance significantly decreases for the prompted model in all settings, while it is
+maintained when using NLI models. Our finetuned SA-RetRobust is best performing in all settings.
+We show that SA-RetRobust learned to both ignore irrelevant context and better utilize relevant
+context by comparing to an ablated model without retrieval in §4.
+retrieval is helpful, e.g., on the explicit 2W IKI MQA and B AMBOOGLE . We perform a detailed
+analysis for our NLI variants in §5.
+Results with Finetuned Models Fig. 4 and Fig. 5 show SA-RetRobust consistently outperforms
+other models. In §A.3, Tab. 4, we present all results for all trained models, showing SA-RetRobust
+outperforms our ablated baselines. Specifically, it outperforms SA-NoRet (fine-tuned without re-
+trieval) by 2.7, 2.4, and 2.4 points on average when using the top-1, a low-ranked, or a random
+context from G OOGLE SEARCH during inference, and SA-@1 by 0.2, 0.4, 3.2 points respectively.
+When retrieving top-1 results from C OLBERTV2, SA-RetRobust outperforms SA-NoRet and SA-
+@1 by 2.7 and 0.3 points on average, respectively. Our results suggest that training on a mixture of
+relevant and irrelevant contexts is necessary for robustness and improved performance. We provide
+a study on the generalization of our trained models to other settings in §A.3.
+Results withLlama-2-70B We compare SA-RetRobust with Llama-2-70B on the NQ dataset to
+assess whether larger models are more robust to irrelevant contexts. Without retrieval, the prompted
+Llama-2-70B outperforms the trained Llama-2-13B by 4.3 points (38.4 vs 34.1). However, when re-
+trieving the top-1 results from GOOGLE SEARCH , SA-RetRobust outperforms all prompted Llama-
+2-70B variants by at least 3.3 points (45.7 vs 42.4), suggesting that increasing model size alone is
+not sufficient to make models better utilize retrieval. We provide the full results in §A.3, Tab. 6.
+5 A NALYSIS
+When Does Irrelevant Context Cause Errors?To assess errors caused by irrelevant context, we
+manually looked at examples from NQ, 2W IKI MQA and S TRATEGY QA, where models succeed
+without retrieval, but fail with it. Specifically, we look at examples where the model is prompted
+with the SA-RMix prompt that includes both top-1 and low-ranked retrieved result and is presented
+with low-rank or random retrieved evidence during inference. We manually annotated 40 examples
+in each setting (240 overall), and find that automatic errors indeed correlate with cases in which
+retrieval augmentation caused the model to err in 73% of the cases (65%-85% in each setting). We
+provide additional details and statistical tests in §A.4.
+We then take a deeper look at the errors. For NQ we find that when using low-ranked context, the
+wrong generated answer entity appears in the retrieved context in the majority (77%) of the cases,
+but only in 37% when retrieving random contexts. This suggests that irrelevant context can cause
+errors even when the generated entities are not retrieved, as shown in §A.4, Fig. 6. For multi-hop
+questions, we test whether irrelevant context leads to errors in question decomposition, or in answer-
+ing intermediate questions. We find that when retrieving low-ranked passages, most of the errors
+8
+
+===== PAGE 21/22 =====
+Published as a conference paper at ICLR 2024
+Given the following question, answer it by providing follow up questions and intermediate answers. If
+intermediate questions are not necessary, answer the question directly. You are provided with evidence
+that can help you arrive at the answer before the question.
+#
+Context1: The Big Red One: Fuller was a World War II veteran and served with the 1st Infantry Division,
+which is nicknamed ”The Big Red One” for the red numeral ”1” on the division’s shoulder patch. He
+received the Silver Star, Bronze Star, and Purple Heart during his service.
+Question: how did the big red one get its name
+Are follow up questions needed here: No.
+So the final answer is: its shoulder patch
+#
+Context1: Location Map of Cayman Islands: The given Cayman Islands location map shows that the Cay-
+man Islands are located in the western Caribbean Sea. Location Map of Cayman Islands. Where is Cayman
+...
+Question: where are the cayman islands on the map
+Are follow up questions needed here: No.
+So the final answer is: western Caribbean Sea
+#
+Context1: Korean War — Combatants, Summary, Years, Map ... - Britannica: After more than a million
+combat casualties had been suffered on both sides, the fighting ended in July 1953 with Korea still divided
+into two hostile states. Negotiations in 1954 produced no further agreement, and the front line has been
+accepted ever since as the de facto boundary between North and South Korea.
+Question: who won the war between north korea and south korea
+Are follow up questions needed here: No.
+So the final answer is: technically still at war
+#
+Context1: It’s Always Sunny in Philadelphia (season 13): The thirteenth season of the American comedy
+television series It´s Always Sunny in Philadelphia premiered on FXX on September 5, 2018. ... The season
+consists of ...
+Question: when does it’s always sunny in philadelphia season 13 start
+Are follow up questions needed here: No.
+So the final answer is: September 5, 2018
+#
+Context1: You’ve Got a Friend in Me: ”You’ve Got a Friend in Me” is a song by Randy Newman. Used as
+the theme song for the 1995 Disney/Pixar animated film Toy Story, it has since become a major ...
+Question: who sang you got a friend in me from toy story
+Are follow up questions needed here: No.
+So the final answer is: Randy Newman
+#
+Context1: April 1961: Yuri Gagarin from the Soviet Union was the first human in space. His vehicle, V ostok
+1 circled Earth at a speed of 27,400 kilometers per hour with the flight lasting 108 minutes.
+Question: when was the first person sent to space Are follow up questions needed here: No.
+So the final answer is: 12 April 1961
+#
+Question:
+Figure 9: The SA-R@1 prompt used in our NQ experiments.
+21
+
+===== PAGE 22/22 =====
+Published as a conference paper at ICLR 2024
+Given the following question, answer it by providing follow up questions and intermediate answers. If
+intermediate questions are not necessary, answer the question directly. You are provided with evidence
+that can help you arrive at the answer before the question.
+#
+Context1: 16th Infantry Regiment (United States): As part of the new 1st Expeditionary Division, soon to
+become known as the ‘Big Red One’, the 16th Infantry, commanded by William Herbert Allaire Jr., sailed
+Question: how did the big red one get its name
+Are follow up questions needed here: No.
+So the final answer is: its shoulder patch
+#
+Context1: Module:Location map/data/Cayman Islands: Module:Location map/data/Cayman Islands is a
+location map definition used to overlay markers and labels on an equirectangular projection map of Cayman
+Question: where are the cayman islands on the map
+Are follow up questions needed here: No.
+So the final answer is: western Caribbean Sea
+#
+Context1: First Battle of Seoul: The First Battle of Seoul, known in North Korean historiography as the
+Liberation of Seoul, was the North Korean capture of the South Korean capital, Seoul,
+Question: who won the war between north korea and south korea
+Are follow up questions needed here: No.
+So the final answer is: technically still at war
+#
+Context1: It’s Always Sunny in Philadelphia (season 13): The thirteenth season of the American comedy
+television series It’s Always Sunny in Philadelphia premiered on FXX on September 5, 2018.
+Question: when does it’s always sunny in philadelphia season 13 start
+Are follow up questions needed here: No.
+So the final answer is: September 5, 2018
+#
+Context1: Randy Newman – You’ve Got a Friend in Me Lyrics: ‘You’ve Got A Friend In Me’ is the theme
+song of the Toy Story franchise, recurring throughout the series in different contexts. It’s first
+Question: who sang you got a friend in me from toy story
+Are follow up questions needed here: No.
+So the final answer is: Randy Newman
+#
+Context1: Timeline of space exploration: This is a timeline of space exploration which includes notable
+achievements, first accomplishments and milestones in humanity’s exploration of outer space.
+Question: when was the first person sent to space Are follow up questions needed here: No.
+So the final answer is: 12 April 1961
+#
+Question:
+Figure 10: The SA-R@10 prompt used in our NQ experiments.
+22

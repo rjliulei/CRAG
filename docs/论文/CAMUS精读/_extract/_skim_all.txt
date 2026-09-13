@@ -1,0 +1,1111 @@
+
+============================================================
+01_AstuteRAG-不完美检索与冲突.txt
+============================================================
+===== PAGE 1/19 =====
+arXiv:2410.07176v2  [cs.CL]  31 May 2025
+ASTUTE RAG: Overcoming Imperfect Retrieval Augmentation and
+Knowledge Conflicts for Large Language Models
+Fei Wang12∗ Xingchen Wan1 Ruoxi Sun1 Jiefeng Chen1 Sercan Ö. Arık1
+1Google Cloud AI Research 2University of Southern California
+fwang598@usc.edu {xingchenw,ruoxis,jiefengc,soarik}@google.com
+Abstract
+Retrieval-augmented generation (RAG), while
+effective in integrating external knowledge to
+enhance large language models (LLMs), can
+be undermined by imperfect retrieval, which
+may introduce irrelevant, misleading, or even
+malicious information. Despite its importance,
+previous studies have rarely explored the be-
+havior of RAG with errors from imperfect re-
+trieval, and how potential conflicts arise be-
+tween the LLMs’ internal knowledge and ex-
+ternal sources. We show that imperfect re-
+trieval augmentation might be inevitable and
+quite harmful, through controlled analysis un-
+der realistic conditions. Knowledge conflicts
+between LLM-internal and external knowledge
+from retrieval is a bottleneck to overcome in the
+post-retrieval stage of RAG. To render LLMs
+resilient to imperfect retrieval, we propose
+ASTUTE RAG, a novel RAG approach that
+adaptively elicits essential information from
+LLMs’ internal knowledge, iteratively consol-
+idates internal and external knowledge with
+source-awareness, and finalizes the answer ac-
+cording to information reliability. Our exper-
+iments with Gemini and Claude demonstrate
+that ASTUTE RAG significantly outperforms
+previous robustness-enhanced RAG methods.
+Notably, ASTUTE RAG is the only approach
+that matches or exceeds the performance of
+LLMs without RAG under worst-case scenar-
+ios. ASTUTE RAG effectively resolves knowl-
+edge conflicts, improving the reliability and
+trustworthiness of RAG systems.
+1 Introduction
+Retrieval-augmented generation (RAG) is com-
+monly used for large language models (LLMs)
+to tackle knowledge-intensive tasks (Guu et al.,
+2020; Lewis et al., 2020). Prior works mainly
+leverage RAG to address the inherent knowledge
+limitations of LLMs, effectively integrating miss-
+ing information and grounding to reliable sources.
+*Work done during internship at Google.
+However, recent research has highlighted a signifi-
+cant drawback that RAG might rely on imperfect
+retrieval, including irrelevant, misleading, or even
+malicious information (Fig. 1), which eventually
+leads to inaccurate LLM responses (Chen et al.,
+2024a; Zou et al., 2024). Moreover, recent studies
+have shown that retrieval augmentation can confuse
+LLMs when retrieved passages are conflicting with
+LLMs’ parametric knowledge (Tan et al., 2024; Xie
+et al., 2024; Jin et al., 2024). These pose significant
+challenges to the trustworthiness of RAG.
+To address imperfect retrieval, earlier work seeks
+to improve the retrieval approaches, such as dy-
+namic and iterative retrieval (Jiang et al., 2023;
+Asai et al., 2023; Yan et al., 2024). However, the
+occurrence of imperfect retrieval is still inevitable,
+due to corpus quality limitations (Shao et al., 2024),
+the reliability of retrievers (Dai et al., 2024), and
+the complexity of queries (Su et al., 2024). Conse-
+quently, recent wor
+
+============================================================
+02_IGP-信息增益剪枝.txt
+============================================================
+===== PAGE 1/26 =====
+Less is More for RAG: Information Gain Pruning for
+Generator-Aligned Reranking and Evidence Selection
+Zhipeng Songa, Yizhi Zhouc, Xiangyu Kongd, Jiulong Jiaoa,e, Xinrui Baof, Xu Youa,
+Xueqing Shib, Yuhang Zhoug and Heng Qia,∗
+aSchool of Computer Science and Technology, Dalian University of Technology, No.2 Linggong Road, Ganjingzi District, Dalian, 116024, China
+bCollege of Health-Preservation and Wellness, Dalian Medical University, No. 9 West Section of Lvshun South Road, Lvshunkou
+District, Dalian, 116044, China
+cSchool of Information Engineering, Dalian Ocean University, No. 2-52, Heishijiao Street, Shahekou District, Dalian, 116023, China
+dSchool of Information Engineering, Liaodong University, No.116 Linjiang Back Street, Zhenan District, Dandong, 118001, China
+eInformation Technology Center, Qinghai University, 251 Ningda Road, Chengbei District, Xining, 810016, China
+fSchool of Electronic and Information Engineering, Liaoning Technical University, 188 Longwan South Street, Sijiatun
+District, Huludao, 125105, China
+gTencent (Dalian Northern Interactive Entertainment Technology Co., Ltd.), 21/F, Tencent Building, No. 26 Jingxian St, Ganjingzi
+District, Dalian, 116085, China
+ARTICLE INFO
+Keywords:
+large language models
+retrieval-augmented generation
+reranking
+truncation
+model uncertainty
+ABSTRACT
+Retrieval-augmented generation (RAG) grounds large language models with external evidence,
+butunderalimitedcontextbudget,thekeychallengeisdecidingwhichretrievedpassagesshould
+be injected. We show that retrieval relevance metrics (e.g., NDCG) correlate weakly with end-
+to-end QA quality and can even become negatively correlated under multi-passage injection,
+where redundancy and mild conflicts destabilize generation. We proposeInformation Gain
+Pruning (IGP), a deployment-friendly reranking-and-pruning module that selects evidence
+using a generator-aligned utility signal and filters weak or harmful passages before truncation,
+without changing existing budget interfaces. Across five open-domain QA benchmarks and
+multiple retrievers and generators, IGP consistently improves the quality–cost trade-off. In a
+representative multi-evidence setting, IGP delivers about+12–20%relative improvement in
+average F1 while reducing final-stage input tokens by roughly76–79%compared to retriever-
+only baselines.
+1. Introduction
+Background.Largelanguagemodels(LLMs)haveshownstrongperformanceonopen-domainquestionansweringand
+complex reasoning tasks (DeepSeek-AI et al., 2025). However, when the input does not contain sufficient supporting
+evidence, LLMs can still generate factually incorrect or inconsistent content (Deng et al., 2025; Mündler et al.,
+2024). Retrieval-augmented generation (RAG) mitigates this issue by retrieving external documents and conditioning
+generation on the retrieved evidence, making answers more traceable and verifiable (Lewis et al., 2020; Ayala &
+Bechard, 2024; Ji et al., 2023; Huang et al., 2025). In practical systems, a common pipeline isretrieve→rerank
+→truncate: the system first retrieves a set of candidate passages, then reranks them (typically by relevance), and
+finallytruncatesthemunderafixedbudget(e.g.,TOPM 1 ora
+
+============================================================
+03_ContextPicker-最小充分子集.txt
+============================================================
+===== PAGE 1/9 =====
+Context-Picker: Dynamic Context Selection Using Multi-stage Reinforcement
+Learning
+Siyuan Zhu1 ,Chengdong Xu 1 ,Kaiqiang Ke 1 andChao Yu 1
+1Sun Yat-sen University
+{zhusy58, xuchd6, kekq}@mail2.sysu.edu.cn, yuchao3@mail.sysu.edu.cn,
+Abstract
+In long-context question answering, selecting the
+appropriate scope of context for a query remains a
+key and unresolved challenge. Insufficient context
+can lead to missing essential information, whereas
+excessive context often introduces noise and de-
+grades answer quality. Conventional methods, such
+as retrieving a fixed number of passages or apply-
+ing reranking, struggle to dynamically determine
+which context to include. This is especially prob-
+lematic for factoid questions, which typically de-
+pend only on a few precise pieces of evidence.
+To overcome this limitation, we propose Context-
+Picker, a reasoning-aware framework that reframes
+context selection as the task of identifying a min-
+imal sufficient evidence subset, moving beyond
+conventional similarity-based ranking. Context-
+Picker uses a human-inspired two-stage reinforce-
+ment learning schedule: stage 1 focuses on improv-
+ing the recall rate of critical passages, and stage 2
+prioritizes pruning redundancy to distill a compact
+evidence set. To resolve reward sparsity, we pro-
+pose an offline evidence distillation pipeline that
+mines “minimal sufficient sets” via a Leave-One-
+Out (LOO) procedure, providing dense and task-
+aligned supervision. Experiments on five long-
+context and multi-hop QA datasets demonstrate
+that our method outperforms strong RAG baselines
+and achieved higher answer accuracy. Ablation
+studies also indicate that our coarse-to-fine opti-
+mization schedule, the redundancy-aware reward
+shaping, along with the rationale generated by the
+policy, all contribute substantially to these gains.
+1 Introduction
+In long-context question answering (LCQA) tasks, Retrieval-
+Augmented Generation (RAG) has become a standard
+paradigm for Large Language Models (LLMs) to retrieve
+knowledge beyond their parametric knowledge [Lewiset al.,
+2021; Guuet al., 2020; Izacardet al., 2022 ]. RAG en-
+ables LLMs to access query-related information and miti-
+gates hallucination. In practice, most RAG systems adopt
+a fixed Top-Kstrategy: a retriever ranks passages based on
+0 25 50 75 100 125 150 175 200
+Top K
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+1.0Score
+Accuracy and Recall vs Top K
+Accuracy
+Recall
+Figure 1: Accuracy versus retrieval depth (Top-K) in a standard
+RAG pipeline. Recall increases withK, but answer accuracy does
+not improve, which is also reported in recent RAG studies[Jinet al.,
+2024].
+their semantic similarity with the query, and only the top-
+Kpassages with highest similarity scores are concatenated
+and fed to the LLMs. Although this method is generally ef-
+fective, it still faces the problem of identifying the suitable
+Kfor each query. IfKis too small, the model may miss
+critical evidence, leading to failure in answering the ques-
+tion. IfKis overly large, too many weakly related passages
+will result in degrading answer quality through distractors,
+attention dilution, and the ”lost-in-the-middle” phenomenon,
+where LLMs underutilize info
+
+============================================================
+04_InfoGainRAG-文档信息增益.txt
+============================================================
+===== PAGE 1/15 =====
+Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing, pages 7190–7204
+November 4-9, 2025 ©2025 Association for Computational Linguistics
+InfoGain-RAG: Boosting Retrieval-Augmented Generation through
+Document Information Gain-based Reranking and Filtering
+Zihan Wang1,*
+Zihan Liang1,*
+Zhou Shao2,*
+Yufei Ma1
+Huangyu Dai1 Ben Chen1,†
+Lingtao Mao1 Chenyi Lei1
+Yuqing Ding1 Han Li1
+1Kuaishou Technology, Beijing, China
+2Peking University, Beijing, China
+Abstract
+Retrieval-Augmented Generation (RAG) has
+emerged as a promising approach to address
+key limitations of Large Language Models
+(LLMs), such as hallucination, outdated knowl-
+edge, and lacking reference. However, current
+RAG frameworks often struggle with identify-
+ing whether retrieved documents meaningfully
+contribute to answer generation. This short-
+coming makes it difficult to filter out irrelevant
+or even misleading content, which notably im-
+pacts the final performance. In this paper, we
+propose Document Information Gain (DIG), a
+novel metric designed to quantify the contribu-
+tion of retrieved documents to correct answer
+generation. DIG measures a document’s value
+by computing the difference of LLM’s genera-
+tion confidence with and without the document
+augmented. Further, we introduce InfoGain-
+RAG, a framework that leverages DIG scores
+to train a specialized reranker, which prioritizes
+each retrieved document from exact distinguish-
+ing and accurate sorting perspectives. This ap-
+proach can effectively filter out irrelevant docu-
+ments and select the most valuable ones for bet-
+ter answer generation. Extensive experiments
+across various models and benchmarks demon-
+strate that InfoGain-RAG can significantly out-
+perform existing approaches, on both single
+and multiple retrievers paradigm. Specifically
+on NaturalQA, it achieves the improvements
+of 17.9%, 4.5%, 12.5% in exact match accu-
+racy against naive RAG, self-reflective RAG
+and modern ranking-based RAG respectively,
+and even an average of 15.3% increment on
+advanced proprietary model GPT-4o across all
+datasets. These results demonstrate the feasibil-
+ity of InfoGain-RAG as it can offer a reliable
+solution for RAG in multiple applications.
+1 Introduction
+Recent advancements in Natural Language Process-
+ing (NLP) have been significantly propelled by the
+*Equal Contribution.
+†Corresponding Author.
+emergence of LLMs (Brown et al., 2020; Achiam
+et al., 2024), which demonstrates remarkable ca-
+pabilities across many knowledge-intensive tasks.
+However, maintaining reliability remains an on-
+going challenge for LLMs, as they often struggle
+with issues such as hallucination, outdated infor-
+mation and lacking reference. RAG has emerged
+as a promising solution to the aforementioned is-
+sues. It can enhance responses by augmenting
+prompts with external information, especially when
+the model’s inherent knowledge is limited (Ram
+et al., 2023). However, the generation quality heav-
+ily depends on both the selection of relevant doc-
+uments and their sequential ordering within the
+LLMs’ context window (Liu et al., 2023).
+Research addressing RAG document prioritiza-
+tion spans multiple perspe
+
+============================================================
+05_GainRAG-增益对齐选段.txt
+============================================================
+===== PAGE 1/12 =====
+Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 10746–10757
+July 27 - August 1, 2025 ©2025 Association for Computational Linguistics
+GainRAG: Preference Alignment in Retrieval-Augmented Generation
+through Gain Signal Synthesis
+Yi Jiang, Sendong Zhao*, Jianbo Li, Haochun Wang, Bing Qin
+Research Center for Social Computing and Interactive Robotics,
+Harbin Institute of Technology, China
+{yjiang,sdzhao,jbli,hcwang,qinb}@ir.hit.edu.cn
+Abstract
+The Retrieval-Augmented Generation (RAG)
+framework introduces a retrieval module to dy-
+namically inject retrieved information into the
+input context of large language models (LLMs),
+and has demonstrated significant success in var-
+ious NLP tasks. However, the current study
+points out that there is a preference gap be-
+tween retrievers and LLMs in the RAG frame-
+work, which limit the further improvement of
+system performance. Some highly relevant pas-
+sages may interfere with LLM reasoning be-
+cause they contain complex or contradictory
+information; while some indirectly related or
+even inaccurate content may help LLM gener-
+ate more accurate answers by providing sugges-
+tive information or logical clues. To solve this,
+we propose GainRAG, a novel approach that
+aligns the retriever’s and LLM’s preferences by
+defining a new metric, “gain”, which measure
+how well an input passage contributes to correct
+outputs. Specifically, we propose a method to
+estimate these gain signals and train a middle-
+ware that aligns the preferences of the retriever
+and the LLM using only limited data. In addi-
+tion, we introduce a pseudo-passage strategy
+to mitigate degradation. The experimental re-
+sults on 6 datasets verify the effectiveness of
+GainRAG1.
+1 Introduction
+Large Language Models (LLMs) (Achiam et al.,
+2023; Touvron et al., 2023) perform well in pro-
+cessing natural language tasks, but their knowledge
+is fixed in model parameters and is difficult to up-
+date dynamically over time (Ji et al., 2023; He
+et al., 2022). To tackle this issue, the Retrieval
+Augmented Generation (RAG) framework adds a
+retrieval module that brings in relevant external
+knowledge and integrates it into the input context
+*Corresponding author
+1The source code is publicly available athttps://github.
+com/liunian-Jay/GainRAG
+Figure 1: We analyze the preference gap between re-
+trieved passages and LLMs on 2 datasets: HotpotQA
+and 2Wiki2MultiHopQA. The top shows the proportion
+of correct and incorrect generations when the retrieved
+passage contains the gold answer. The bottom shows
+the proportion of whether the passage used contains the
+golden answer when the LLM response is correct.
+of the LLMs. This approach has shown impressive
+results across various natural language processing
+tasks (Gao et al., 2023; Lewis et al., 2020). Pre-
+vious work is devoted to solving two problems,
+namely, retrieving more relevant informationin
+retrieval and effectively utilizing context to gener-
+ate the correct answerin generation. However,
+they fail to address the preference gap between
+the retriever and the LLMs. Recent studies have
+highlighted that while retrieved passages may 
+
+============================================================
+06_RECOMP-检索压缩.txt
+============================================================
+===== PAGE 1/23 =====
+RECOMP: I MPROVING RETRIEVAL -AUGMENTED LMS
+WITH COMPRESSION AND SELECTIVE AUGMENTATION
+Fangyuan Xu1, Weijia Shi2, Eunsol Choi1
+Department of Computer Science
+1The University of Texas at Austin
+2University of Washington
+{fangyuan,eunsol}@utexas.edu , swj0419@cs.washington.edu
+ABSTRACT
+Retrieving documents and prepending them in-context at inference time improves
+performance of language model (LMs) on a wide range of tasks. However, these
+documents, often spanning hundreds of words, make inference substantially more
+expensive. We propose compressing the retrieved documents into textual sum-
+maries prior to in-context integration. This not only reduces the computational
+costs but also relieves the burden of LMs to identify relevant information in long re-
+trieved documents. We present two compressors – an extractive compressorwhich
+selects useful sentences from retrieved documents and an abstractive compressor
+which generates summaries by synthesizing information from multiple documents.
+Both compressors are trained to improve LMs’ performance on end tasks when the
+generated summaries are prepended to the LMs’ input, while keeping the summary
+concise. If the retrieved documents are irrelevant to the input or offer no additional
+information to LM, our compressor can return an empty string, implementing
+selective augmentation. We evaluate our approach on language modeling task and
+open domain question answering task. We achieve a compression rate of as low as
+6% with minimal loss in performance for both tasks, significantly outperforming
+the off-the-shelf summarization models. We show that our compressors trained
+for one LM can transfer to other LMs on the language modeling task and provide
+summaries largely faithful to the retrieved documents.1
+1 I NTRODUCTION
+Retrieval-augmented language models (RALMs) (Khandelwal et al., 2019; Izacard et al., 2022; Lewis
+et al., 2020; Borgeaud et al., 2022) have shown impressive performance on knowledge-intensive tasks
+(Kwiatkowski et al., 2019; Petroni et al., 2021). Simply prepending retrieved documents to the input
+without updating the language models (LMs) (Shi et al., 2023b; Ram et al., 2023; Si et al., 2022)
+allows retrieval augmentation even for black-box LMs, but such approach comes with limitations.
+First, it increases computational costs as LMs now encode substantially more tokens. Second, even if
+we manage to adapt LMs to efficiently incorporate longer context (Beltagy et al., 2020; Zaheer et al.,
+2020), these models struggle to use all information in the context, frequently missing information
+placed in the middle (Liu et al., 2023). Third, prepending a large number of documents in-context
+can further confuse LMs with irrelevant information, degrading model performances (Mallen et al.,
+2022; Shi et al., 2023a).
+To overcome such limitations, we propose RECOMP (Retrieve, Compress, Prepend), an inter-
+mediate step for RALMs which compresses retrieved documents into a textual summary prior to
+in-context augmentation. Figure 1 illustrates our approach. The generated summary should be concise
+to maximize efficiency, be faithful to the retrieved evidence documents, and guide RALM to 
+
+============================================================
+07_Provence-上下文剪枝.txt
+============================================================
+===== PAGE 1/24 =====
+January, 2025
+Provence: efficient and robust context pruning for
+retrieval-augmented generation
+Nadezhda Chirkova Thibault Formal Vassilina Nikoulina Stéphane Clinchant
+NAVER LABS Europe, Grenoble, France
+https://huggingface.co/naver/provence-reranker-debertav3-v1
+Abstract
+Retrieval-augmented generation improves various aspects of large language models (LLMs) generation,
+but suffers from computational overhead caused by long contexts as well as the propagation of irrelevant
+retrieved information into generated responses. Context pruning deals with both aspects, by removing
+irrelevant parts of retrieved contexts before LLM generation. Existing context pruning approaches
+are however limited, and do not provide a universal model that would be bothefficient and robust in
+a wide range of scenarios, e.g., when contexts contain a variable amount of relevant information or
+vary in length, or when evaluated on various domains. In this work, we close this gap and introduce
+Provence (Pruning and Reranking Of retrieVEd relevaNt ContExts), an efficient and robust context
+pruner for Question Answering, which dynamically detects the needed amount of pruning for a given
+context and can be used out-of-the-box for various domains. The three key ingredients ofProvence
+are formulating the context pruning task as sequence labeling, unifying context pruning capabilities
+with context reranking, and training on diverse data. Our experimental results show thatProvence
+enables context pruning with negligible to no drop in performance, in various domains and settings,
+at almost no cost in a standard RAG pipeline. We also conduct a deeper analysis alongside various
+ablations to provide insights into training context pruners for future work.
+1. Introduction
+Retrieval-Augmented Generation (RAG) has become
+a widely-used paradigm for improving factuality, at-
+tribution, and adaptability of Large Language Models
+(LLMs) (Das et al., 2019; Asai et al., 2024; Seo et al.,
+2019; Lewis et al., 2020; Mallen et al., 2023a; Min
+et al., 2023). Augmenting a given user’s query with re-
+trieved relevant contexts helps to avoid the generation
+of untruthful information and enables the provision of
+references used to generate the answer. Furthermore,
+using a domain-specific datastore may enable access
+and reasoning over a previously unknown knowledge
+– without fine-tuning the LLM. One additional advan-
+tage of the RAG approach is the easy plug-and-play
+architecture (LangChain): practitioners may choose
+components (retrievers, generator LLMs, context gran-
+ularity etc.) which best suit their particular cases to
+maximize the final performance.
+Corresponding author(s): nadia.chirkova@naverlabs.com, thibault.formal@naverlabs.com
+arXiv:2501.16214v1  [cs.CL]  27 Jan 2025
+
+===== PAGE 2/24 =====
+Provence: efficient and robust context pruning for retrieval-augmented generation
+Train 
+question
+Datastore
+How many 
+French words 
+are there in 
+English?
+input input target
+Question: How many French words are there 
+in English? 
+Context: [1] Inﬂuence of French on English. [2] 
+The most notable inﬂuence of French has … 
+Answer the Question, using only information 
+provided in the Conte
+
+============================================================
+08_SEALRAG-预算内替换.txt
+============================================================
+===== PAGE 1/24 =====
+Replace, Don’t Expand: Mitigating Context
+Dilution in Multi-Hop RAG via Fixed-Budget
+Evidence Assembly
+A PREPRINT
+Moshe Lahmy11 and
+ Roi Yozevitch21,2
+1Department of Electrical Engineering, Ariel University, Ariel, Israel
+2Department of Computer and Software Engineering, Ariel University, Ariel, Israel
+December 22, 2025
+Abstract
+Retrieval-Augmented Generation (RAG) systems often fail on multi-hop queries when the initial
+retrieval misses a bridge fact. Prior corrective approaches, such as Self-RAG, CRAG, and Adaptive-
+k, typically address this byaddingmore context or pruning existing lists. However, simply ex-
+panding the context window often leads tocontext dilution, where distractors crowd out relevant
+information. We proposeSEAL-RAG, a training-free controller that adopts a“replace, don’t ex-
+pand”strategy to fight context dilution under a fixed retrieval depthk. SEAL executes a (Search→
+Extract→Assess→Loop) cycle: it performs on-the-fly, entity-anchored extraction to build a live
+gap specification(missing entities/relations), triggers targeted micro-queries, and usesentity-first
+rankingto actively swap out distractors for gap-closing evidence. We evaluate SEAL-RAG against
+faithful re-implementations of Basic RAG, CRAG, Self-RAG, and Adaptive-kin a shared envi-
+ronment onHotpotQAand2WikiMultiHopQA. On HotpotQA (k=3), SEAL improves answer
+correctness by+3 to +13 ppand evidence precision by+12 to +18 ppover Self-RAG. On 2Wiki-
+MultiHopQA (k=5), it outperforms Adaptive-kby+8.0 ppin accuracy and maintains96%evi-
+denceprecision, compared to 22% for CRAG. These gains are statistically significant (p<0.001).
+By enforcing fixed-kreplacement, SEAL yields a predictable cost profile while ensuring the top-
+kslots are optimized for precision rather than mere breadth. We release our code and data at
+https://github.com/mosherino/SEAL-RAG.
+Keywords:Retrieval-Augmented Generation; multi-hop reasoning; context dilution; evidence as-
+sembly; SEAL-RAG; HotpotQA; 2WikiMultiHopQA
+1 Introduction
+Large Language Models (LLMs) augmented with retrieval (RAG) are now the standard for knowledge-
+intensive tasks[18]. However, standard “Retrieve-then-Read” pipelines are brittle in multi-hop scenarios:
+if the initial top-kretrieval misses a crucial “bridge” entity or relation, the generator hallucinates or fails
+[14, 26].
+To mitigate this, recent research has focused oniterative and corrective RAG. Systems likeSelf-
+Reflective RAG (Self-RAG)[2] andCorrective RAG (CRAG)[28] introduce feedback loops: they
+critique the retrieved evidence and trigger additional retrieval steps if gaps are detected. While effective
+at improving recall, these methods typically operate viaBreadth-First Addition: they append new
+passages to the existing context. This approach assumes that “more context is better,” but in production
+1
+arXiv:2512.10787v2  [cs.AI]  19 Dec 2025
+
+===== PAGE 2/24 =====
+environments with strict latency and token budgets, this assumption fails. Expanding the context window
+introducesdistractors(irrelevant passages that confuse the model) andlateral redundancy(duplicate
+information), often degrading the model’s ability to reason over the specific b
+
+============================================================
+09_CorrectiveRAG-检索纠正.txt
+============================================================
+===== PAGE 1/16 =====
+Corrective Retrieval Augmented Generation
+Shi-Qi Yan1*, Jia-Chen Gu2*, Yun Zhu3, Zhen-Hua Ling1
+1National Engineering Research Center of Speech and Language Information Processing,
+University of Science and Technology of China, Hefei, China
+2Department of Computer Science, University of California, Los Angeles
+3Google DeepMind
+yansiki@mail.ustc.edu.cn, gujc@ucla.edu, yunzhu@google.com, zhling@ustc.edu.cn
+Abstract
+Large language models (LLMs) inevitably
+exhibit hallucinations since the accuracy of
+generated texts cannot be secured solely by
+the parametric knowledge they encapsulate. Al-
+though retrieval-augmented generation (RAG)
+is a practicable complement to LLMs, it relies
+heavily on the relevance of retrieved docu-
+ments, raising concerns about how the model
+behaves if retrieval goes wrong. To this end, we
+propose the Corrective Retrieval Augmented
+Generation (CRAG ) to improve the robustness
+of generation. Specifically, a lightweight
+retrieval evaluator is designed to assess the
+overall quality of retrieved documents for a
+query, returning a confidence degree based
+on which different knowledge retrieval ac-
+tions can be triggered. Since retrieval from
+static and limited corpora can only return sub-
+optimal documents, large-scale web searches
+are utilized as an extension for augmenting the
+retrieval results. Besides, a decompose-then-
+recompose algorithm is designed for retrieved
+documents to selectively focus on key infor-
+mation and filter out irrelevant information in
+them. CRAG is plug-and-play and can be
+seamlessly coupled with various RAG-based
+approaches. Experiments on four datasets
+covering short- and long-form generation tasks
+show that CRAG can significantly improve the
+performance of RAG-based approaches. 1
+1 Introduction
+Large language models (LLMs) have attracted
+increasing attention and exhibited impressive abili-
+ties to understand instructions and generate fluent
+language texts (Brown et al., 2020; Ouyang et al.,
+2022; Touvron et al., 2023a). Nevertheless, LLMs
+inevitably manifest hallucinations (Ji et al., 2023)
+due to their struggle with factual errors (Mallen
+et al., 2023; Min et al., 2023) and inability to
+secure the accuracy of generated texts solely by
+* Equal contribution.
+1The code is available at github.com/HuskyInSalt/CRAG
+Q: What is Henry Feilden's occupation?
+Henry Feilden (Conservative politician):Henry Master Feilden was an Conservative Party politician…
+Politician.✓
+Q: Who was the screenwriter for Death of a Batman?
+Batman (1989 film): of the murder of Bruce Wayne's parents. When Hamm'sscript was rewritten, …
+Retriever
+✗Hamm.
+RetrievedDocuments
+Generator
+Accurate DocumentsInaccurate Documents
+Generator
+Figure 1: The examples show that a low-quality retriever
+is prone to introducing a substantial amount of irrelevant
+information, impeding the generators from acquiring
+accurate knowledge and potentially misleading them.
+the parametric knowledge they encapsulate (Zhang
+et al., 2023b; Muhlgay et al., 2023).
+Prior research has introduced the retrieval tech-
+niques to incorporate the knowledge relevant to
+input and augment generation, as exemplified
+by retrieval-augmented generation (RAG) (Le
+
+============================================================
+10_SelfRAG-检索批判生成.txt
+============================================================
+===== PAGE 1/30 =====
+Preprint.
+SELF -RAG : L EARNING TO RETRIEVE , GENERATE , AND
+CRITIQUE THROUGH SELF -REFLECTION
+Akari Asai†, Zeqiu Wu†, Yizhong Wang†§, Avirup Sil‡, Hannaneh Hajishirzi†§
+†University of Washington §Allen Institute for AI ‡IBM Research AI
+{akari,zeqiuwu,yizhongw,hannaneh}@cs.washington.edu, avi@us.ibm.com
+ABSTRACT
+Despite their remarkable capabilities, large language models (LLMs) often produce
+responses containing factual inaccuracies due to their sole reliance on the paramet-
+ric knowledge they encapsulate. Retrieval-Augmented Generation (RAG), an ad
+hoc approach that augments LMs with retrieval of relevant knowledge, decreases
+such issues. However, indiscriminately retrieving and incorporating a fixed number
+of retrieved passages, regardless of whether retrieval is necessary, or passages are
+relevant, diminishes LM versatility or can lead to unhelpful response generation.
+We introduce a new framework called Self-Reflective Retrieval-Augmented Gen-
+eration (SELF -RAG) that enhances an LM’s quality and factuality through retrieval
+and self-reflection. Our framework trains a single arbitrary LM that adaptively
+retrieves passages on-demand, and generates and reflects on retrieved passages
+and its own generations using special tokens, called reflection tokens. Generating
+reflection tokens makes the LM controllable during the inference phase, enabling it
+to tailor its behavior to diverse task requirements. Experiments show that SELF -
+RAG (7B and 13B parameters) significantly outperforms state-of-the-art LLMs
+and retrieval-augmented models on a diverse set of tasks. Specifically, SELF -RAG
+outperforms ChatGPT and retrieval-augmented Llama2-chat on Open-domain QA,
+reasoning and fact verification tasks, and it shows significant gains in improving
+factuality and citation accuracy for long-form generations relative to these models.1
+1 I NTRODUCTION
+State-of-the-art LLMs continue to struggle with factual errors (Mallen et al., 2023; Min et al., 2023)
+despite their increased model and data scale (Ouyang et al., 2022). Retrieval-Augmented Generation
+(RAG) methods (Figure 1 left; Lewis et al. 2020; Guu et al. 2020) augment the input of LLMs
+with relevant retrieved passages, reducing factual errors in knowledge-intensive tasks (Ram et al.,
+2023; Asai et al., 2023a). However, these methods may hinder the versatility of LLMs or introduce
+unnecessary or off-topic passages that lead to low-quality generations (Shi et al., 2023) since they
+retrieve passages indiscriminately regardless of whether the factual grounding is helpful. Moreover,
+the output is not guaranteed to be consistent with retrieved relevant passages (Gao et al., 2023) since
+the models are not explicitly trained to leverage and follow facts from provided passages. This
+work introduces Self-Reflective Retrieval-augmented Generation ( SELF -RAG) to improve an
+LLM’s generation quality, including its factual accuracy without hurting its versatility, via on-demand
+retrieval and self-reflection. We train an arbitrary LM in an end-to-end manner to learn to reflect on
+its own generation process given a task input by generating both task output and intermittent special
+tokens (i.e.,
+
+============================================================
+11_AdaptiveRAG-按复杂度适配检索.txt
+============================================================
+===== PAGE 1/15 =====
+Adaptive-RAG: Learning to Adapt Retrieval-Augmented
+Large Language Models through Question Complexity
+Soyeong Jeong1 Jinheon Baek2 Sukmin Cho1 Sung Ju Hwang1,2 Jong C. Park1*
+School of Computing1 Graduate School of AI2
+Korea Advanced Institute of Science and Technology1,2
+{starsuzi,jinheon.baek,nelllpic,sjhwang82,jongpark}@kaist.ac.kr
+Abstract
+Retrieval-Augmented Large Language Models
+(LLMs), which incorporate the non-parametric
+knowledge from external knowledge bases into
+LLMs, have emerged as a promising approach
+to enhancing response accuracy in several tasks,
+such as Question-Answering (QA). However,
+even though there are various approaches deal-
+ing with queries of different complexities, they
+either handle simple queries with unnecessary
+computational overhead or fail to adequately
+address complex multi-step queries; yet, not
+all user requests fall into only one of the sim-
+ple or complex categories. In this work, we
+propose a novel adaptive QA framework that
+can dynamically select the most suitable strat-
+egy for (retrieval-augmented) LLMs from the
+simplest to the most sophisticated ones based
+on the query complexity. Also, this selec-
+tion process is operationalized with a classi-
+fier, which is a smaller LM trained to predict
+the complexity level of incoming queries with
+automatically collected labels, obtained from
+actual predicted outcomes of models and in-
+herent inductive biases in datasets. This ap-
+proach offers a balanced strategy, seamlessly
+adapting between the iterative and single-step
+retrieval-augmented LLMs, as well as the no-
+retrieval methods, in response to a range of
+query complexities. We validate our model
+on a set of open-domain QA datasets, cov-
+ering multiple query complexities, and show
+that ours enhances the overall efficiency and
+accuracy of QA systems, compared to rele-
+vant baselines including the adaptive retrieval
+approaches. Code is available at: https://
+github.com/starsuzi/Adaptive-RAG.
+1 Introduction
+Recent Large Language Models (LLMs) (Brown
+et al., 2020; OpenAI, 2023; Touvron et al., 2023;
+Anil et al., 2023) have shown overwhelming per-
+formances across diverse tasks, including question-
+* Corresponding author
+0.5 1.0 1.5 2.0 2.5 3.0 3.5
+Time per Query
+47
+48
+49
+50
+51Performance (F1)
+  No Retrieval
+  Single-step Approach
+  Adaptive Retrieval
+  Multi-step Approach  Adaptive-RAG (Ours)
+Performance vs Time with GPT-3.5
+Figure 1: QA performance (F1) and efficiency (Time/Query)
+for different retrieval-augmented generation approaches. We
+use the GPT-3.5-Turbo-Instruct as the base LLM.
+answering (QA) (Yang et al., 2018; Kwiatkowski
+et al., 2019). However, they still generate factu-
+ally incorrect answers since their knowledge solely
+relies on their parametric memory (Kasai et al.,
+2022; Mallen et al., 2023). Meanwhile, memoriz-
+ing all the (ever-changing) world knowledge may
+not be possible. To address this problem, retrieval-
+augmented LLMs (Borgeaud et al., 2022; Izacard
+et al., 2023; Shi et al., 2023), which incorporate
+non-parametric knowledge into LLMs with addi-
+tional retrieval modules, have gained much increas-
+ing attention. Specifically, these models access
+a knowledge base, 
+
+============================================================
+12_LongLLMLingua-长上下文压缩.txt
+============================================================
+===== PAGE 1/20 =====
+LongLLMLingua: Accelerating and Enhancing LLMs in Long Context
+Scenarios via Prompt Compression
+Huiqiang Jiang, Qianhui Wu, Xufang Luo,
+Dongsheng Li, Chin-Yew Lin, Yuqing Yang, Lili Qiu
+Microsoft Corporation
+{hjiang,qianhuiwu,xufluo,dongsli,cyl,yuqyang,liliqiu}@microsoft.com
+Abstract
+In long context scenarios, large language mod-
+els (LLMs) face three main challenges: higher
+computational cost, performance reduction,
+and position bias. Research indicates that LLM
+performance hinges on the density and posi-
+tion of key information in the input prompt. In-
+spired by these findings, we propose LongLLM-
+Lingua for prompt compression towards im-
+proving LLMs’ perception of the key informa-
+tion to simultaneously address the three chal-
+lenges. Our extensive evaluation across vari-
+ous long context scenarios demonstrates that
+LongLLMLingua not only enhances perfor-
+mance but also significantly reduces costs and
+latency. For instance, in the NaturalQuestions
+benchmark, LongLLMLingua boosts perfor-
+mance by up to 21.4% with around 4x fewer
+tokens in GPT-3.5-Turbo, leading to substantial
+cost savings. It achieves a 94.0% cost reduction
+in the LooGLE benchmark. Moreover, when
+compressing prompts of about 10k tokens at ra-
+tios of 2x-6x, LongLLMLingua can accelerate
+end-to-end latency by 1.4x-2.6x.1
+1 Introduction
+Large language models (LLMs) have revolution-
+ized user-oriented language technologies and are
+serving as crucial components in more and more
+applications. Carefully designing prompts is nec-
+essary to achieve better performance in specific
+downstream tasks. The commonly used technolo-
+gies such as In-Context Learning (ICL) (Min et al.,
+2022; Dong et al., 2023), Retrieval Augment Gener-
+ation (RAG) (Lewis et al., 2020; Asai et al., 2024),
+and Multi-turn Agent (Shen et al., 2024; Park et al.,
+2023; Wu et al., 2023a) are driving prompts to be
+increasingly longer, even reaching thousands of to-
+kens. Scenarios such as multi-document question
+answering, code completion, and document sum-
+marization also necessitate the processing of long
+contexts.
+1Access our code at https://aka.ms/LongLLMLingua.
+There are three main challenges when LLMs are
+used in long context scenarios: (1) Higher com-
+putational costs, encompassing both financial and
+latency expenses. (2) Longer prompts introduce
+irrelevant and redundant information, which can
+weaken LLMs’ performance (Shi et al., 2023), as
+illustrated in Figure 1a. (3) LLMs exhibit position
+bias (Kamradt, 2023), also known as the "lost in the
+middle" issue (Liu et al., 2024), suggesting that the
+placement of key information within the prompt
+significantly affects LLMs’ performance. This is
+demonstrated by the purple curve in Figure 1b.
+Inspired by these observations, we propose
+LongLLMLingua to address the three challenges.
+Specifically, we use LLMLingua (Jiang et al.,
+2023a) as the backbone for prompt compression
+to address the first challenge, i.e., reduce cost and
+latency. However, in the case of long contexts, the
+distribution of question-relevant key information
+in the prompt is generally dynamic and sparse. Ex-
+isting prompt compression methods like LLMLin-
+gua (Jiang et al., 2023a
+
+============================================================
+13_RAGCSM-影响引导上下文选择.txt
+============================================================
+===== PAGE 1/28 =====
+Influence Guided Context Selection for Effective
+Retrieval-Augmented Generation
+Jiale Deng, Yanyan Shen∗, Ziyuan Pei, Youmin Chen, Linpeng Huang
+Shanghai Jiao Tong University
+{jialedeng, shenyy, pzy_live, chenyoumin, lphuang}@sjtu.edu.cn
+Abstract
+Retrieval-Augmented Generation (RAG) addresses large language model (LLM)
+hallucinations by grounding responses in external knowledge, but its effectiveness
+is compromised by poor-quality retrieved contexts containing irrelevant or noisy
+information. While existing approaches attempt to improve performance through
+context selection based on predefined context quality assessment metrics, they
+show limited gains over standard RAG. We attribute this limitation to their failure
+in holistically utilizing available information (query, context list, and generator)
+for comprehensive quality assessment. Inspired by recent advances in data se-
+lection, we reconceptualize context quality assessment as an inference-time data
+valuation problem and introduce the Contextual Influence Value (CI value). This
+novel metric quantifies context quality by measuring the performance degradation
+when removing each context from the list, effectively integrating query-aware rele-
+vance, list-aware uniqueness, and generator-aware alignment. Moreover, CI value
+eliminates complex selection hyperparameter tuning by simply retaining contexts
+with positive CI values. To address practical challenges of label dependency and
+computational overhead, we develop a parameterized surrogate model for CI value
+prediction during inference. The model employs a hierarchical architecture that
+captures both local query-context relevance and global inter-context interactions,
+trained through oracle CI value supervision and end-to-end generator feedback.
+Extensive experiments across 8 NLP tasks and multiple LLMs demonstrate that
+our context selection method significantly outperforms state-of-the-art baselines,
+effectively filtering poor-quality contexts while preserving critical information.
+Code is available athttps://github.com/SJTU-DMTai/RAG-CSM.
+1 Introduction
+Retrieval-Augmented Generation (RAG) has emerged as a powerful approach for mitigating hal-
+lucinations in large language models (LLMs) by grounding their responses in external knowledge
+sources [4, 19, 24]. A typical RAG pipeline consists of two core components: aretrieverthat searches
+for query-relevant contexts from external knowledge sources, and an LLMgeneratorthat produces
+responses using the retrieved contexts. Despite its advantages, RAG faces important challenges in
+practical applications. That is, external knowledge sources may contain substantial noisy data, and
+retrievers based on similarity metrics are inherently imperfect [54]. As a result, retrieved contexts
+often include irrelevant and noisy information [12, 54, 57]. This issue is particularly problematic as
+LLM generators tend to rely heavily on the provided contexts [ 12, 31, 38], potentially producing
+incorrect responses when provided with poor-quality contexts.
+Recent work [8, 20, 47, 57, 58] proposed context selection to shield generators from poor-quality
+contexts. This strategy depends oncontext
+
+============================================================
+14_ZeroRAG-零冗余知识.txt
+============================================================
+===== PAGE 1/15 =====
+Zero-RAG: Towards Retrieval-Augmented Generation with Zero
+Redundant Knowledge
+Qi Luo1,∗ Xiaonan Li1,∗ Junqi Dai1 Shuang Cheng1 Yining Zheng1 Xipeng Qiu1,2,†
+1School of Computer Science, Fudan University
+2Shanghai Innovation Institute
+qiluo22@m.fudan.edu.cn
+Abstract
+Retrieval-Augmented Generation has shown re-
+markable results to address Large Language
+Models’ hallucinations, which usually uses a
+large external corpus to supplement knowledge
+to LLMs. However, with the development of
+LLMs, the internal knowledge of LLMs has
+expanded significantly, thus causing significant
+knowledge redundancy between the external
+corpus and LLMs. On the one hand, the in-
+dexing cost of dense retrieval is highly related
+to the corpus size and thus significant redun-
+dant knowledge intensifies the dense retrieval’s
+workload. On the other hand, the redundant
+knowledge in the external corpus is not helpful
+to LLMs and our exploratory analysis shows
+that it instead hurts the RAG performance on
+those questions which the LLM can answer
+by itself. To address these issues, we propose
+Zero-RAG to tackle these challenges. Specifi-
+cally, we first propose the Mastery-Score metric
+to identify redundant knowledge in the RAG
+corpus to prune it. After pruning, answers to
+"mastered" questions rely primarily on inter-
+nal knowledge of the LLM. To better harness
+the internal capacity, we propose Query Router
+and Noise-Tolerant Tuning to avoid the irrele-
+vant documents’ distraction and thus further im-
+prove the LLM’s utilization of internal knowl-
+edge with pruned corpus. Experimental results
+show that Zero-RAG prunes the Wikipedia cor-
+pus by 30% and accelerates the retrieval stage
+by 22%, without compromising RAG’s perfor-
+mance.
+1 Introduction
+Retrieval-Augmented Generation (RAG) has be-
+come a important research topic to address
+Large Language Models’ (LLMs) hallucination is-
+sues(Lin et al., 2022; Wang et al., 2023; Gao et al.,
+2024; Fan et al., 2024; Li et al., 2024; Yu et al.,
+2024). By integrating the internal knowledge of
+LLMs with a comprehensive range of external in-
+formation, RAG enables LLMs to significantly en-
+HotpotQA TriviaQA EQ NQ0
+20
+40
+60
+80
+100EM
+(a) Exact Match (EM) recall on four
+Wikipedia-based QA datasets, evaluated us-
+ing Llama3.3-70B, shows a substantial over-
+lap between the model’s knowledge and
+Wikipedia.
+TriviaQA HotpotQA EQ60
+70
+80
+90
+100EM
+without RAG
+with RAG
+(b) Comparison of performance on previously
+mastered questions: without versus with re-
+dundant knowledge retrieval.
+Figure 1: Overview of knowledge redundancy: (a)
+shows the overlap between LLM and corpus knowl-
+edge; (b) indicates that a large part of LLM knowledge
+is derived from Wikipedia; (c) reveals that redundant
+knowledge degrades performance on originally correct
+responses.
+hance their factual accuracy while generating high-
+quality, informative responses (Asai et al., 2023; Li
+et al., 2024).
+RAG usually integrates the LLM with a large ex-
+ternal corpus (Borgeaud et al., 2022), which leads
+to a high heavy overload. With the development
+of LLMs, (Grattafiori et al., 2024; DeepSeek-AI
+et al., 2025; Team et al., 2024) the internal knowl-
+edge of LLMs increases
+
+============================================================
+15_QUBO-证据集合选择.txt
+============================================================
+===== PAGE 1/10 =====
+QUBO-Optimized Evidence Selection for Retrieval-Augmented Question
+Answering with Unconventional Solvers
+Rahul Singh
+University of California Santa Barbara
+Santa Barbara, California
+rps@ucsb.edu
+Madhav Vadlamani*
+Georgia Institute of Technology
+Atlanta, Gerogia
+mvadlamani6@gatech.edu
+Abstract
+Retrieval-augmented question answering de-
+pends on selecting an appropriate set of evi-
+dence passages before answer generation. How-
+ever, many retrieval pipelines rely on top- k
+ranking, where passages are selected primar-
+ily by individual relevance scores, even though
+multi-hop questions often require passages that
+jointly satisfy multiple information require-
+ments. Recent LLM-based methods address
+this limitation by treating retrieval as a set-
+selection problem, but using an LLM for this
+intermediate selection stage can be expensive
+and difficult to scale. In this work, we formu-
+late evidence selection as a Quadratic Uncon-
+strained Binary Optimization (QUBO) prob-
+lem. Given a question, candidate passages,
+and decomposed information requirements, our
+method constructs an energy function that bal-
+ances passage relevance, requirement coverage,
+support strength, redundancy, complementarity,
+and compactness. Low-energy configurations
+correspond to evidence subsets that cover the
+necessary requirements while avoiding unnec-
+essary or repetitive context. The selected pas-
+sages are then passed to a downstream language
+model for answer generation, separating the
+combinatorial evidence-selection step from the
+semantic answer-generation step. We evaluate
+the proposed QUBO selector on HotpotQA, a
+multi-hop question-answering benchmark, and
+compare it with LLM-based set selection as
+well as non-LLM baselines including BM25,
+relevance top-k, maximal marginal relevance,
+hybrid lexical-semantic ranking, greedy cover-
+age, and random selection. The QUBO selector
+achieves competitive exact-match and token-
+F1 performance relative to LLM-based set se-
+lectors, while providing a solver-compatible
+formulation for structured evidence selection.
+These results suggest that multi-hop evidence
+selection can be cast as a discrete optimiza-
+tion problem, opening a path toward retrieval
+pipelines in which LLMs are reserved primar-
+*Equal Contribution
+ily for answer generation while the selection
+stage is executed by unconventional Ising ma-
+chines, quantum annealers, quantum-inspired
+optimizers, or gate-model quantum algorithms
+for QUBO solving.
+1 Introduction
+Large language models (LLMs) have demonstrated
+strong capabilities in natural language understand-
+ing and generation, but their responses remain con-
+strained by both the information encoded in their
+parameters and the quality of the context provided
+at inference time. Retrieval-Augmented Genera-
+tion (RAG) addresses this limitation by coupling a
+parametric language model with an external non-
+parametric knowledge source, allowing generation
+to be conditioned on retrieved evidence rather than
+relying solely on memorized knowledge (Lewis
+et al., 2020). This paradigm is especially useful for
+knowledge-intensive tasks requiring factual ground-
+ing, provenance, domain adaptation, and access to
+d
+
+============================================================
+16_RobustRALM-NLI滤无关上下文.txt
+============================================================
+===== PAGE 1/22 =====
+Published as a conference paper at ICLR 2024
+MAKING RETRIEVAL -AUGMENTED LANGUAGE
+MODELS ROBUST TO IRRELEVANT CONTEXT
+Ori Yoran1 Tomer Wolfson1,2 Ori Ram1 Jonathan Berant1
+1Tel Aviv University, 2Allen Institute for AI
+{ori.yoran, ori.ram, joberant}@cs.tau.ac.il tomerw@allenai.org
+ABSTRACT
+Retrieval-augmented language models (RALMs) hold promise to produce lan-
+guage understanding systems that are are factual, efficient, and up-to-date. An
+important desideratum of RALMs, is that retrieved information helps model per-
+formance when it is relevant, and does not harm performance when it is not. This
+is particularly important in multi-hop reasoning scenarios, where misuse of irrele-
+vant evidence can lead to cascading errors. However, recent work has shown that
+retrieval augmentation can sometimes have a negative effect on performance. In
+this work, we present a thorough analysis on five open-domain question answer-
+ing benchmarks, characterizing cases when retrieval reduces accuracy. We then
+propose two methods to mitigate this issue. First, a simple baseline that filters out
+retrieved passages that do not entail question-answer pairs according to a natural
+language inference (NLI) model. This is effective in preventing performance re-
+duction, but at a cost of also discarding relevant passages. Thus, we propose a
+method for automatically generating data to fine-tune the language model to prop-
+erly leverage retrieved passages, including for challenging multi-hop tasks, using
+a mix of relevant and irrelevant contexts at training time. We empirically show that
+even 1,000 examples suffice to train the model to be robust to irrelevant contexts
+while maintaining high performance on examples with relevant ones.
+1 I NTRODUCTION
+Large Language Models (LLMs) (Brown et al., 2020; Chowdhery et al., 2022; Touvron et al., 2023)
+are the foundation on top of which modern language systems are built. However, open-domain
+question answering (ODQA; Chen et al. 2017) and other knowledge-intensive tasks (Thorne et al.,
+2018; Petroni et al., 2021) require vast amounts of up-to-date factual knowledge about rare entities
+that even very large models cannot memorize (Roberts et al., 2020; Dhingra et al., 2022). A domi-
+nant approach for combating this issue has been Retrieval Augmented Language Models (RALMs),
+which incorporate a retrieval mechanism to reduce the need for storing information in the LLM
+parameters (Guu et al., 2020; Lewis et al., 2020b; Izacard et al., 2023; Rubin & Berant, 2023). Fur-
+thermore, RALMs have also been shown to improve ODQA performance in an in-context setting
+(without any training), simply by prepending retrieved sentences to the input question (Ram et al.,
+2023). Nevertheless, retrievers are not perfect and past work has shown that noisy retrieval can
+negatively affect LLM performance (Petroni et al., 2020; Li et al., 2023). For example, in Fig. 1,
+when posed with the questions “Who is playing Jason on General Hospital?” a vanilla LLM (left)
+correctly answers the question while the RALM (right) is “distracted” by irrelevant context about
+the actor portraying Cooper, not Jason.
+In this work, we analyze and improve the 
+
+============================================================
+17_CER-因果充分证据集-UNVERIFIED.txt
+============================================================
+===== PAGE 1/22 =====
+ 
+  
+*xu.yonghui@hotmail.com 
+https://doi.org/10.65102/is2026255  Published: 30 April, 2026 
+Anno XLIII - Num. 1 - 2026 
+CER: Learning Causally Sufficient Evidence Sets for Verifiable and 
+Trustworthy RAG 
+Jizhang Tan1, Yonghui Xu2,* and Lizhen Cui3 
+1 School of Software, Shandong University, Jinan, 25000,Shandong, China 
+2 Joint SDU-NTU Centre for Artificial Intelligence Research (C-FAIR), Shandong University, 
+Jinan, 25000, Shandong, China  
+3 School of Software, Shandong University, Jinan, 25000, Shandong, China 
+ 
+ 
+SUMMARY: Aiming at the  problem that evidence selection in retrieval enhancement 
+generation focuses on semantic relevance, and it is difficult to ensure causal necessity and 
+minimum sufficiency, a retrieval enhancement generation method based on verifiable causal 
+sufficient evidence set was proposed. Method A counterfactual delete -replace intervention is 
+used to construct an evidence -level supervision signal. A pre -trained language model causal 
+re-ranking, R-GCN evidence complementary modeling, quality proxy function calibration, and 
+minimum sufficient set search are combined to jointly optimize the answer quality, evidence size, 
+and reasoning cost. Experiments on HotpotQA, HOVER, QASPER and ALCE datasets show 
+that the proposed method achieves F1 of 67.1 on HotpotQA and 82.3 on HO VER, with an 
+average evidence size reduction of 18% -22%. The context overhead is reduced by up to 60%, 
+and it maintains better robustness under the condition of conflict evidence and near -repeated 
+interference. The results show that the proposed method can effectively improve the verifiability, 
+compactness and stability of the retrieval enhancement generation system. 
+ 
+KEYWORDS: Retrieval enhancement generation; Counterfactual learning; Evidence graph 
+modeling; Verifiable generation 
+1 Introduction 
+Retrieve-augmented generation collaborates the external retrieval module and the large 
+language model generation process, which has become an important technical path for open -
+domain question answering, fact checking and scientific question answering. Ram et al. (2023) 
+proposed to dynamically access external evidence in context to enhance the knowledge 
+utilization ability of language models [ 1]. Siriwardhana et al. (2023) studied the domain 
+adaptation problem of RAG in open-domain question answering [2]. Katsis et al. (2025) further 
+constructed RAG evaluation benchmarks in multi-turn dialogue scenarios [9]. Related studies 
+have shown that external evidence access can improve the answer accuracy, reduce th e risk of 
+unfounded generation, and enhance the source traceability of results [ 1, 2, 9]. However, the 
+existing mainstream methods still mainly rely on BM25, dense retrieval or cross -encoder to 
+achieve semantic relevance ranking, and their optimization goal focuses on "retrieving relevant 
+text" rather than "identifying the really necessary evidence for the answer". Li et al. (2025) 
+studied the development path of generative information retrieval [12], and Huang et al. (2025) 
+pointed out that large model illusion control is closely related to evidence quality [ 13]. 
+
+===== PAGE 2/22 =====
+Tan et a

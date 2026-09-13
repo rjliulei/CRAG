@@ -1,0 +1,528 @@
+
+===== PAGE 1/26 =====
+Less is More for RAG: Information Gain Pruning for
+Generator-Aligned Reranking and Evidence Selection
+Zhipeng Songa, Yizhi Zhouc, Xiangyu Kongd, Jiulong Jiaoa,e, Xinrui Baof, Xu Youa,
+Xueqing Shib, Yuhang Zhoug and Heng Qia,∗
+aSchool of Computer Science and Technology, Dalian University of Technology, No.2 Linggong Road, Ganjingzi District, Dalian, 116024, China
+bCollege of Health-Preservation and Wellness, Dalian Medical University, No. 9 West Section of Lvshun South Road, Lvshunkou
+District, Dalian, 116044, China
+cSchool of Information Engineering, Dalian Ocean University, No. 2-52, Heishijiao Street, Shahekou District, Dalian, 116023, China
+dSchool of Information Engineering, Liaodong University, No.116 Linjiang Back Street, Zhenan District, Dandong, 118001, China
+eInformation Technology Center, Qinghai University, 251 Ningda Road, Chengbei District, Xining, 810016, China
+fSchool of Electronic and Information Engineering, Liaoning Technical University, 188 Longwan South Street, Sijiatun
+District, Huludao, 125105, China
+gTencent (Dalian Northern Interactive Entertainment Technology Co., Ltd.), 21/F, Tencent Building, No. 26 Jingxian St, Ganjingzi
+District, Dalian, 116085, China
+ARTICLE INFO
+Keywords:
+large language models
+retrieval-augmented generation
+reranking
+truncation
+model uncertainty
+ABSTRACT
+Retrieval-augmented generation (RAG) grounds large language models with external evidence,
+butunderalimitedcontextbudget,thekeychallengeisdecidingwhichretrievedpassagesshould
+be injected. We show that retrieval relevance metrics (e.g., NDCG) correlate weakly with end-
+to-end QA quality and can even become negatively correlated under multi-passage injection,
+where redundancy and mild conflicts destabilize generation. We proposeInformation Gain
+Pruning (IGP), a deployment-friendly reranking-and-pruning module that selects evidence
+using a generator-aligned utility signal and filters weak or harmful passages before truncation,
+without changing existing budget interfaces. Across five open-domain QA benchmarks and
+multiple retrievers and generators, IGP consistently improves the quality–cost trade-off. In a
+representative multi-evidence setting, IGP delivers about+12–20%relative improvement in
+average F1 while reducing final-stage input tokens by roughly76–79%compared to retriever-
+only baselines.
+1. Introduction
+Background.Largelanguagemodels(LLMs)haveshownstrongperformanceonopen-domainquestionansweringand
+complex reasoning tasks (DeepSeek-AI et al., 2025). However, when the input does not contain sufficient supporting
+evidence, LLMs can still generate factually incorrect or inconsistent content (Deng et al., 2025; Mündler et al.,
+2024). Retrieval-augmented generation (RAG) mitigates this issue by retrieving external documents and conditioning
+generation on the retrieved evidence, making answers more traceable and verifiable (Lewis et al., 2020; Ayala &
+Bechard, 2024; Ji et al., 2023; Huang et al., 2025). In practical systems, a common pipeline isretrieve→rerank
+→truncate: the system first retrieves a set of candidate passages, then reranks them (typically by relevance), and
+finallytruncatesthemunderafixedbudget(e.g.,TOPM 1 oratokenbudget)beforeinjection(Yuetal.,2024;Keetal.,
+2024).
+∗Corresponding author.
+songzhipeng@mail.dlut.edu.cn( Zhipeng Song);zhouyizhi@dlou.edu.cn( Yizhi Zhou);xiangyukong@liaodongu.edu.cn(
+Xiangyu Kong);jiaojiulong@mail.dlut.edu.cn( Jiulong Jiao);4724200573@stu.lntu.edu.cn( Xinrui Bao);
+m13050778592@mail.dlut.edu.cn( Xu You);shixq@dmu.edu.cn( Xueqing Shi);ginozhou@tencent.com( Yuhang Zhou);
+hengqi@dlut.edu.cn( Heng Qi)
+ORCID(s):0009-0009-6249-1988( Zhipeng Song);0000-0002-6761-5953( Yizhi Zhou);0000-0003-1940-8674( Xiangyu Kong);
+0009-0001-9852-7999( Jiulong Jiao);0009-0000-7916-2122( Xinrui Bao);0009-0009-4583-7537( Xu You);0009-0008-3754-6396(
+Xueqing Shi);0000-0002-8770-3934( Heng Qi)
+1TOPM denotesthepassage-budgetinterfaceforevidenceinjection:atmost𝑀evidencepassagesareretained;TOPKdenotesthatthegenerator
+returns only the top-𝐾token log-probabilities at each decoding step (used to compute the uncertainty proxy in this paper), to avoid confusion with
+the “top-𝑘retrieved documents” setting.
+Song et al.:Preprint submitted to ElsevierPage 1 of 26arXiv:2601.17532v1  [cs.CL]  24 Jan 2026
+
+===== PAGE 2/26 =====
+Less is More for RAG
+Motivation.In deployed RAG systems, the evidence-injection budget is often tight, making evidence selection
+under the budget a primary practical concern (Li et al., 2024). Injecting multiple pieces of evidence may introduce
+redundancy,ambiguity,andconflictingstatements,whichconsumethecontextbudgetanddisturbgeneration,causing
+unstableconclusionsorunnecessaryover-explanations(Liuetal.,2024;Jinetal.,2025).Moreimportantly,relevance
+is not equivalent to the marginal utility of evidence for generation. Even highly relevant passages may contain
+parallel claims, conditional constraints, or contradictory details, which can spread the generation distribution, making
+answers less stable and sometimes less accurate (H. Wang et al., 2025; Jiang et al., 2025).
+0.04 0.05 0.06 0.07 0.08 0.09
+0.18
+0.20
+0.22
+0.24
+0.26F1 (Generation)
+T opM=1 (Spearman =0.11)
+BM25
+BGE
+CE
+YesNo QLM
+IGP(0.0)
+IGP(0.05)
+0.05 0.06 0.07 0.08 0.09 0.10
+T opM=5 (Spearman =-0.54)
+BM25
+BGE
+CE
+YesNo QLM
+IGP(0.0)
+IGP(0.05)
+NDCG (Retrieval)
+BM25 BGE CE YesNo QLM IGP(0.0) IGP(0.05)
+Figure 1: In RAG, better retrieval ranking does not necessarily yield better end-to-end generation.Under two evidence
+budgets (TopM=1 andTopM=5), the Spearman rank correlation between NDCG and end-to-end F1 is generally weak,
+and can be negative when multiple passages are injected (see subsubsection 4.4.1).
+First Contribution: Relevance–Utility Mismatch.We identify a persistent mismatch in practical budgeted RAG:
+improving retrieval relevance does not reliably improve end-to-end answer quality. Across evidence budgets,
+offline relevance metrics (e.g., NDCG) show weak and non-robust correlation with generation quality (F1), and
+the correlation can even turn negative when multiple passages are injected (e.g., TOPM= 5) (Figure 1; see
+subsubsection 4.4.1). We attribute this to a generator-side mechanism: evidence injection reshapes token-level output
+distributions,andredundant,non-conclusive,orinconsistentpassagescanspreadprobabilitymass,increaseuncertainty
+on key tokens, and destabilize generation under a fixed context budget. This motivates shifting the evidence-selection
+objective from “optimizing relevance” to “optimizing evidence utility for generation,” where good evidence should
+make the generator more concentrated and stable on key output tokens (i.e., reduce uncertainty).
+Second Contribution: Our Approach.We proposeInformation Gain Pruning (IGP)as a plug-and-play replace-
+mentforthererankstageinretrieve→rerank→truncate(Figure2).IGPmeasuresevidenceutilityfromthe
+generator’sperspectivebyconstructinganormalizeduncertainty(NU)fromstep-wiseoutputdistributionsanddefining
+information gain (IG) as the reduction in uncertainty after injecting a candidate passage. It then reranks candidates by
+IGandappliesathresholdtoprunenegative-utilityorweak-utilitypassagesbeforetruncation,preventingredundantor
+conflicting evidence from occupying the limited context. Importantly, IGP only replacesrerank;truncateand the
+original budget interface (TOPM or token budget) remain unchanged, and IGP requiresno labels, no training, and
+no parameter access—only step-wise logits (or TOPK log-probabilities), making it compatible with black-box LLM
+services.
+Third Contribution: Main Findings.Across multiple open-domain QA benchmarks, different first-stage retrievers,
+and different generator families/scales, IGP consistently improves or maintains end-to-end answer qualitywhile
+reducing the final-stage context cost, thereby strengthening the Pareto frontier of quality versus cost. Notably, in
+a representativemulti-evidencesetting, IGP delivers a clearwin–win: it improves the average token-level F1 by
+about+12–20%while reducing the average final-stage input tokens by roughly76–79%(relative to the retriever-
+only baseline). Our analyses further show that these gains are driven primarily byutility-aware admission control
+(threshold-based pruning)rather than reordering alone, and are most pronounced when multiple passages are
+injected—where relevance-based reranking is more likely to admit redundant or mildly conflicting evidence under
+a fixed budget, amplifying generator uncertainty and hurting answer stability. Together, these results suggest that
+Song et al.:Preprint submitted to ElsevierPage 2 of 26
+
+===== PAGE 3/26 =====
+Less is More for RAG
+User
+ Retriever
+ LLM User
+Relevance Assessment
+Doc 1 Doc 1 (High Relevance)
+Doc 2 Doc 2
+Doc 3 Doc 3
+Query
+Reranker
+Documents
+Filtered Out
+Evidence Utility Assessment
+Which document best helps 
+answer the specific query?
+Doc 2 Doc 2 (Helpful)
+Doc 1 Doc 1 (Harmful)
+Doc 3 Doc 3(Noisy)
+User
+ Retriever
+ LLM User
+Query
+ Documents
+Answer
+Answer
+Doc 2
+Doc 1
+Doc 2
+Figure 2: RAG pipeline comparison: relevance reranking vs. IGP.IGP replaces relevance scoring with an information-gain
+signal aligned with the generator, and can filter negative/weak-gain evidence; the budget-based truncation mechanism
+remains unchanged.
+admission control guided by generator-aligned utilityis a key lever for more reliable and cost-effective budgeted
+RAG.
+Summary of Contributions.
+•Relevance–utility mismatch:We show that offline relevance (e.g., NDCG) correlates weakly—and can be
+negative—with end-to-end QA quality (F1), especially under multi-evidence budgets.
+•IGP (generator-aligned rerank + pruning):We propose Information Gain Pruning, which scores passages
+byuncertaintyreduction(informationgain)andprunesweak/negative-utilityevidencebeforetruncation.IGPis
+label-free, training-free, parameter-free, and requires only step-wise logits/TOPK outputs.
+•Better quality–cost frontier:Across QA benchmarks, retrievers, and generator families/scales, IGP improves
+or maintains F1 while reducing final-stage input tokens, consistently strengthening the Pareto frontier—most
+notably in multi-evidence settings.
+Paper Organization.The remainder of this paper is organized as follows. section 2 reviews related work on RAG,
+reranking/evidence selection, and uncertainty estimation for LLMs. section 3 introduces Information Gain Pruning
+(IGP),includingtheTOPKnormalizeduncertaintyproxyandtheIG-basedreranking-and-pruningalgorithm.section4
+presents the experimental setup and main results, followed by ablations and sensitivity analyses, the relevance–utility
+mismatchstudy,androbustnessevaluationsacrossretrieversandgeneratorfamilies/scales.Finally,section5concludes
+with practical implications, limitations, and future directions.
+2. Related Work
+This paper targets a practical bottleneck in deployed RAG: under a limited context budget, the key question
+iswhich evidence should enter the generator context, i.e., evidence that ismost helpful for generationrather than
+merelymost relevant. Related studies broadly fall into three directions: (1) RAG frameworks and retriever/reader
+design,(2)rerankingandevidenceselectionintheretrieve→rerank→truncatepipeline,and(3)uncertainty
+quantification and hallucination detection for LLMs. Our Information Gain Pruning (IGP) sits at their intersection: it
+Song et al.:Preprint submitted to ElsevierPage 3 of 26
+
+===== PAGE 4/26 =====
+Less is More for RAG
+uses a generator-side uncertainty reduction signal to rerank candidates and filter out negative/weak-utility evidence
+beforetruncation.
+2.1. Retrieval-Augmented Generation (RAG)
+Retrieval-Augmented Generation (RAG) augments LLMs with an external, updatable non-parametric corpus, so
+generation can be grounded in retrievable evidence and become more traceable. Lewis et al. (2020) propose the
+RAGframeworkthatretrievesfromlargecorpora(e.g.,Wikipedia)andconditionsgenerationonretrieveddocuments,
+improving factuality and interpretability on knowledge-intensive tasks.
+Ontheretrieverside,denseretrievalisacommonfront-endforopen-domainQAandRAG.Karpukhinetal.(2020)
+introduceDPR,adual-encodermethodthatlearnsrepresentationsforqueriesandpassagesandsignificantlyimproves
+recall, making it a popular first-stage retriever. Guu et al. (2020) further integrate retrieval into pre-training, enabling
+retrieval during pre-training, fine-tuning, and inference, and encouraging the model to learn how to use retrievable
+knowledge more systematically.
+On the reader/generator side, Izacard & Grave (2021) propose FiD, which separately encodes multiple evidence
+passages and fuses them in the decoder, strengthening multi-evidence aggregation and serving as a strong baseline in
+RAG-styleopen-domainQA.Overall,manysystemsfollowthe“high-recallretrieval+strongreader/fusion”paradigm.
+However,asemphasizedinourintroduction,underafixedcontextbudget(e.g.,TOPMortokenbudget),multi-evidence
+injection often brings redundancy and conflicts, so retrieving “relevant” content alone does not guarantee better end-
+to-end generation.
+2.2. Reranking and Evidence Selection in RAG
+To decide what evidence enters the context, practical RAG systems commonly useretrieve→rerank→
+truncate: retrieve a candidate set, rerank by a scoring function (often relevance), and then truncate under a fixed
+budget (TOPM or token budget). A classic reranking approach is the discriminative cross-encoder. Nogueira & Cho
+(2019) jointly encode(𝑞,𝑑)with BERT and output a relevance score, showing strong passage reranking performance,
+but with high inference cost, it is typically used as a second-stage reranker.
+Generative reranking is another line. Nogueira et al. (2020) introduce MonoT5, which reformulates ranking as
+a sequence-to-sequence task and derives relevance scores from generated labels or target-token logits, achieving
+competitive ranking quality. To balance effectiveness and efficiency, Khattab & Zaharia (2020) propose ColBERT
+with late interaction, enabling scalable token-level matching while retaining strong performance.
+More recently, LLMs have been explored as rerankers. Sun et al. (2023) study instruction-based LLM reranking
+(e.g., ChatGPT/GPT-4) and discuss prompting and distillation for efficiency and generalization. Despite these
+advances, most reranking methods still optimizerelevance. In contrast, our introduction highlights a relevance–utility
+mismatch: under limited budgets, especially when multiple passages are injected, “more relevant” evidence can still
+be redundant, non-conclusive, or conflicting, and thus may reduce themarginal utilityof the context for generation.
+This motivates evidence selection objectives that are aligned with the generator, not only retrieval relevance.
+2.3. Uncertainty Quantification and Hallucination Detection for LLMs
+LLMscanbefluentbutunreliablewhenevidenceisinsufficientorinconsistent,makinguncertaintyquantification
+(UQ) important for trustworthy systems. Shorinwa et al. (2025) provide a comprehensive survey of LLM uncertainty
+methods, covering white-box signals (e.g., token probabilities, entropy) and black-box signals (e.g., multi-sample
+consistency and semantic grouping), and summarize their use in hallucination detection and risk-aware decision
+making.
+Calibrationstudiesthematchbetweenconfidenceandtruecorrectness.Guoetal.(2017)showthatmodernneural
+models are often overconfident and propose post-hoc calibration methods such as temperature scaling. For epistemic
+uncertainty, common approximations include MC dropout and deep ensembles: Gal & Ghahramani (2016) interpret
+dropout as approximate Bayesian inference, while Lakshminarayanan et al. (2017) show deep ensembles can provide
+strong and robust uncertainty estimates.
+In closed-source or black-box LLM settings, full distributions and internal states are usually unavailable. Xiong et
+al. (2024) propose a black-box framework combining verbalized confidence prompts with multi-sample consistency
+and aggregation, showing that self-reported confidence can be miscalibrated but sampling-based signals can help
+predict failures. Uncertainty is also used to detect hallucinations: Farquhar et al. (2024) propose semantic entropy
+by sampling multiple answers and clustering them by meaning; larger semantic disagreement indicates higher
+hallucination risk and can support refusal, triggering retrieval, or human review.
+Song et al.:Preprint submitted to ElsevierPage 4 of 26
+
+===== PAGE 5/26 =====
+Less is More for RAG
+2.4. Positioning of This Paper
+Prior work makes progress in RAG, reranking, and UQ, but they are often used in a loosely connected way: RAG
+focuses on retrieving evidence, reranking focuses on relevance ordering, and UQ is usually appliedaftergeneration
+for confidence reporting or hallucination detection. OurIGPdiffers in three aligned aspects:
+•From relevance to evidence utility for generation:Instead of ranking evidence by relevance, IGP uses a
+generator-alignedsignal—whetherevidenceinjectionreducesgenerationuncertainty—toestimatethemarginal
+utilityof a passage under a fixed context budget.
+•Earlier control at thererankstage:Rather than detecting issues after an answer is produced, IGP performs
+utility-aware reranking and threshold-based pruningbefore evidence enters the context, filtering redundant,
+noisy, or conflicting passages that provide negative/weak gain.
+•Deployment-friendlyandblack-boxcompatible:Consistentwithourintroduction,IGPislabel-free,training-
+free, and parameter-free. It only needs step-wise logits or TOPK log-probabilities, and itreplaces onlyrerank
+while keepingtruncateand the original budget interface (e.g., TOPM or token budget) unchanged.
+Inshort,thispapermovesuncertaintyfromananswer-leveldiagnostictoanevidence-leveldecisionsignal,offering
+a modular, generator-aligned method for evidence admission under budget-limited RAG deployment.
+3. Methodology
+This section introduces Information Gain Pruning (IGP) and its uncertainty-reduction signal used for evidence
+selection in budgeted RAG. We first give an overview of the pipeline replacement and key quantities, then define
+normalized uncertainty (NU), information gain (IG), and the final reranking-and-pruning algorithm, followed by
+practical implementation notes.
+3.1. Overview
+Problem setting.We consider a standard budgeted RAG pipeline,retrieve→rerank→truncate, where a
+first-stage retriever returns candidatesand the system must select evidence for the generator under a fixed budget
+(e.g.,Top-𝑀,optionallywithatokenguard𝐵).Inthisregime,relevance-basedrerankingcanbesuboptimal:passages
+mayberelevantyetredundant,non-decisive,ormutuallyinconsistent,consumingthelimitedcontextanddestabilizing
+generation.
+Key idea.We align evidence selection with the generator rather than retrieval relevance. Our intuition is thatuseful
+evidence should make the model more decisive under a fixed decoding protocol, i.e., it shouldreducetoken-level
+uncertainty over the next-token distribution. This yields an evidence-level criterion: a passage is helpful if injecting it
+decreases the generator’s uncertainty compared to using no evidence.
+Information Gain Pruning (IGP).We proposeInformation Gain Pruning (IGP)as a drop-in replacement for
+rerank:
+retrieve→IGP→truncate.
+IGP computes a black-box uncertainty proxy from step-wise outputs using only Top-𝐾log-probabilities, forming
+normalized uncertainty (NU). It then defines a passage utility score,information gain (IG), as the reduction in NU
+afterinjectingthepassage.CandidatesarerankedbyIGandfilteredbyathreshold𝑇 𝑝 topruneweakornegative-utility
+evidencebeforetruncation, preventing low-gain passages from occupying the limited context.
+Interface and requirements.IGP islabel-free, training-free, and parameter-free. It requires onlyblack-box
+access to step-wise logits (or Top-𝐾log-probabilities) under a fixed prompt and a deterministic probing protocol.
+Importantly,IGPchangesonlythererankstage;thedownstreamtruncatemoduleandtheoriginalbudgetinterface
+(Top-𝑀and optional𝐵) remain unchanged, ensuring plug-and-play compatibility with existing systems.
+Notation.Frequently used symbols are summarized in Table 1, with key quantities defined in subsection 3.2 and
+subsection 3.3.
+Song et al.:Preprint submitted to ElsevierPage 5 of 26
+
+===== PAGE 6/26 =====
+Less is More for RAG
+Symbol Meaning
+𝑞Query/question.
+= {𝑑𝑖}𝑁
+𝑖=1 First-stage retrieved candidate evidence passages.
+Candidate list output by IGP after reranking and pruning.
+Final retained evidence set aftertruncate.
+𝜙Generator (black-box; returns logits or Top-𝐾log-probabilities).
+,𝑉Vocabulary and its size.
+𝐳𝑡 ∈ℝ 𝑉 Logits at decoding step𝑡.
+̂ 𝑦𝑡 Greedy token at step𝑡.
+𝐾Top-𝐾truncation hyperparameter for NU/IG estimation.
+(𝐾)
+𝑡 Top-𝐾token set at step𝑡.
+𝑀𝑇Maximum rollout length for uncertainty estimation.
+𝑇Effective rollout length (EOS or𝑀𝑇truncation).
+𝑀Evidence budget (Top-𝑀): number of retained passages (enforced bytruncate).
+𝐵(Optional) token-budget guard to satisfy hard input-length constraints.
+̂𝑁𝑈(𝑞;𝜙,𝐾)Unconditional normalized uncertainty.
+̂𝑁𝑈(𝑞∣𝑑;𝜙,𝐾)Conditional normalized uncertainty given a passage𝑑.
+𝐼𝐺(𝑑,𝑞;𝜙,𝐾)Information gain / utility proxy: uncertainty reduction.
+𝑇𝑝 Pruning threshold (admission barrier).
+Table 1
+Main notation used in section 3.
+3.2. Uncertainty Proxy: TOPK Normalized Uncertainty (NU)
+Deterministic probing protocol and effective length.To obtain a reproducible and low-variance signal, we use
+greedy decoding (temperature0) when estimating NU/IG. At step𝑡, the greedy token iŝ 𝑦𝑡 = arg max𝑣∈ 𝑧𝑡,𝑣.
+Generation stops when EOS is produced or when reaching the maximum rollout length𝑀𝑇. We define the effective
+rollout length as:
+𝑇= min{𝑀𝑇, 𝑇EOS}, 𝑇 EOS = min{𝑡∶̂ 𝑦𝑡 = EOS}.(1)
+TOPKtruncation and renormalization.Let (𝐾)
+𝑡 be the TOPK token set at step𝑡. We renormalize the probability
+mass only over this set:
+̃ 𝑝𝜙(𝑦𝑡 =𝑣∣̂ 𝑦<𝑡,𝑞;𝐾) =
+exp(𝑧𝑡,𝑣)
+∑
+𝑣′∈(𝐾)
+𝑡
+exp(𝑧𝑡,𝑣′ ), 𝑣∈ (𝐾)
+𝑡 .(2)
+Token-level entropy and normalized uncertainty.We compute the TOPK entropy and its normalized form:
+̃𝐻𝑡(𝑞;𝜙,𝐾) = −
+∑
+𝑣∈(𝐾)
+𝑡
+̃ 𝑝𝜙(𝑣∣̂ 𝑦<𝑡,𝑞;𝐾) log̃ 𝑝𝜙(𝑣∣̂ 𝑦<𝑡,𝑞;𝐾),(3)
+̃ 𝑢𝑡(𝑞;𝜙,𝐾) =
+̃𝐻𝑡(𝑞;𝜙,𝐾)
+log𝐾 ∈ [0,1].(4)
+Sequence-level uncertainty.We define a sequence-level normalized uncertainty by averaging across steps:
+̂𝑁𝑈(𝑞;𝜙,𝐾) = 1
+𝑇
+𝑇∑
+𝑡=1
+̃ 𝑢𝑡(𝑞;𝜙,𝐾) = 1
+𝑇log𝐾
+𝑇∑
+𝑡=1
+̃𝐻𝑡(𝑞;𝜙,𝐾).(5)
+Single-evidence conditional uncertainty.After injecting a single candidate passage𝑑(through a fixed prompt
+interface), we obtain a rollout̂ 𝑦(𝑑) and length𝑇(𝑑). We define the conditional normalized uncertainty as:
+̂𝑁𝑈(𝑞∣𝑑;𝜙,𝐾) = 1
+𝑇(𝑑) log𝐾
+𝑇(𝑑)
+∑
+𝑡=1
+(
+−
+∑
+𝑣∈(𝐾,𝑑)
+𝑡
+̃ 𝑝𝜙(𝑣∣̂ 𝑦(𝑑)
+<𝑡,𝑞,𝑑;𝐾) log̃ 𝑝𝜙(𝑣∣̂ 𝑦(𝑑)
+<𝑡,𝑞,𝑑;𝐾)
+)
+.(6)
+Song et al.:Preprint submitted to ElsevierPage 6 of 26
+
+===== PAGE 7/26 =====
+Less is More for RAG
+3.3. Information Gain (IG): A Generator-Aligned Evidence-Utility Signal
+Definition.We defineevidence utility for generation(information gain) as the reduction in uncertainty:
+𝐼𝐺(𝑑,𝑞;𝜙,𝐾) = ̂𝑁𝑈(𝑞;𝜙,𝐾) − ̂𝑁𝑈(𝑞∣𝑑;𝜙,𝐾).(7)
+𝐼𝐺>0meansthepassagemakesgenerationmorecertain(uncertaintydecreases),while𝐼𝐺<0suggeststhepassage
+may introduce noise or conflicts that spread the output distribution and reduce utility under a limited context budget.
+We target ranking consistency, not an unbiased information-theoretic estimate.We do not treat (7) as an
+unbiased estimator of true conditional mutual information. Our goal is a practical proxy that isreproducibleandlow-
+varianceunder a fixed prompt interface and a fixed decoding protocol, so that therelative orderingof candidates
+matches their end-to-end utility for generation.
+WhyTop-𝐾entropyundergreedydecodinghelpsutilityranking.Underafixedpromptandgreedydecoding,a
+high-utility passage often increases the logit margin of the intended next tokens at multiple key steps. This makes the
+Top-𝐾probability mass more concentrated and reduces Top-𝐾entropy. Becausê𝑁𝑈averages entropy across steps
+(Eq. (5)–(6)), consistent entropy reductions over several key steps accumulate into a stable passage-level difference.
+In contrast, passages that introduce competing hypotheses tend to flatten probabilities among alternative tokens,
+increasing entropy and producing smaller (or even negative)𝐼𝐺. This is an intuition for rank preservation, rather
+than a formal guarantee.
+3.4. IGP: Utility-Aware Reranking and Pruning, While Keeping the TOPM Budget Interface
+IGP computes𝐼𝐺for each candidate passage and produces an output list. It first sorts candidates by𝐼𝐺in
+descending order and then applies a pruning threshold𝑇𝑝 to filter weak or negative-utility evidence (keeping only
+those with𝐼𝐺(𝑑,𝑞;𝜙,𝐾)≥𝑇 𝑝). This provides explicit evidence admission control and improves the quality of the
+prefixunderalimitedcontextbudget.Afterthat,theoriginaltruncatemoduleappliestheTOPM rule(andoptionally
+the token guard𝐵) onto obtain the final injected set.
+Algorithm 1IGP as a plug-and-play replacement for rerank: retrieve-IGP-truncate
+Require:Query𝑞; candidates= {𝑑 𝑖}𝑁
+𝑖=1; generator𝜙; TOPK parameter𝐾; maximum rollout length𝑀𝑇; pruning
+threshold𝑇𝑝; budget interface: TOPM (optional token guard𝐵).
+Ensure:Threshold-filtered and reranked candidate list; final evidence set(produced bytruncate).
+1:𝜈 0 ← ̂𝑁𝑈(𝑞;𝜙,𝐾)⊳computed once
+2:for all𝑖= 1to𝑁in parallel do⊳batch/parallel rollouts over passages
+3:𝜈 𝑖 ← ̂𝑁𝑈(𝑞∣𝑑 𝑖;𝜙,𝐾)
+4:𝑠 𝑖 ←𝜈0 −𝜈𝑖
+5:end for
+6:𝜋←argsort 𝑖(𝑠𝑖;↓)
+7:←the list obtained by orderingwith𝜋
+8:←[𝑑∈∶𝐼𝐺(𝑑,𝑞;𝜙,𝐾)≥𝑇 𝑝]
+9:←Truncate(;𝑀, 𝐵)⊳TOPM (optional token guard)
+10:return,
+Scope: IGP vs.truncate.IGP decideswhich passages are admitted and how they are ordered(reranking +
+pruning), but it does not decidehow manypassages are ultimately injected. The final evidence size is still enforced by
+truncatethrough the same TOPM interface (and optionally the token guard𝐵). In many RAG corpora, passages are
+chunked into roughly similar lengths, so Top-𝑀is a practical approximation of a fixed token budget. When passage
+lengthsvarysubstantially,enablingthetoken-budgetguard𝐵insidetruncatesatisfieshardlengthconstraintswithout
+changing the definition or scope of IGP.
+Song et al.:Preprint submitted to ElsevierPage 7 of 26
+
+===== PAGE 8/26 =====
+Less is More for RAG
+3.5. Implementation Notes
+Black-box interface assumption.IGP does not require gradients or model parameters, and it uses no labels or
+training. Its only requirement is that the generator𝜙, under a fixed prompt interface and decoding protocol, can return
+step-wise logits (or equivalently TOPK log-probabilities), which are used to compute TOPK entropy and̂𝑁𝑈.
+Deterministic probing vs. answer generation.We use greedy decoding (temperature0) only when estimating
+NU/IG, because it makes the signal reproducible and reduces variance. This probing protocol is used to compare
+candidate passages and does not change the system’s budget interface. In practice, the final answer generation stage
+can follow the original decoding setting of the deployed system.
+Meaning of the threshold𝑇𝑝 (admission barrier).The threshold𝑇 𝑝 controls evidence admission: only passages
+with𝐼𝐺(𝑑,𝑞;𝜙,𝐾)≥𝑇 𝑝 enterandparticipateinlaterTOPM truncation.Alarger𝑇 𝑝 ismoreconservativeandfilters
+more weak/negative-utility passages, while a smaller𝑇𝑝 keeps more candidates to preserve coverage. To approximate
+“nopruning,”onecanset𝑇 𝑝 toasufficientlysmallvalue(e.g.,𝑇 𝑝 = −∞orasmallnegativenumber),inwhichcasethe
+interface and behavior reduce to pure IG-based reranking followed by the originaltruncatemodule (i.e., the system
+retains the same TOPM/𝐵budget contract, only changing the ordering signal).
+Choice of𝐾and𝑀𝑇.𝐾controls the granularity of the uncertainty proxy. A very small𝐾can make ̃𝐻𝑡 overly
+sensitive to local logit ties, while an excessively large𝐾may include many low-probability tail tokens that are
+noisy under black-box TOPK access. In practice, we treat𝐾as an estimation knob: moderate values typically yield
+stable rankings because the entropy mass is dominated by the head of the distribution under greedy decoding. The
+maximumrolloutlength𝑀𝑇boundscomputationandstandardizestheprobinghorizon.Weusethesame𝑀𝑇forthe
+unconditional rollout and all conditional rollouts to ensure comparability (Eq. (1)).
+Lengtheffectsandfaircomparisonacrosspassages.Becauseinjectingevidencecanchangetheeffectivelength
+(𝑇(𝑑)) by triggering earlier/later EOS, we definê𝑁𝑈as a per-step average (Eq. (5)–(6)), which normalizes by the
+realized rollout length. This makeŝ𝑁𝑈comparable even when𝑇 (𝑑) varies. If desired, one can further enforce a
+commonhorizonbytruncatingallrolloutstomin(𝑇,𝑇 (𝑑))whencomputingthesums,butwefindthelength-normalized
+definition already provides a low-variance ranking signal under deterministic probing.
+Prompting convention and evidence injection.IGP treats the generator𝜙as a black box; the only requirement is
+a fixed prompt interface that deterministically injects a single passage𝑑(e.g., via a dedicatedEvidence:field) while
+keeping the query𝑞and all other formatting identical. To avoid confounding factors, the system prompt, decoding
+protocol(temperature0forprobing),andanytoolorformattinginstructionsareheldconstantacrossallrollouts.Only
+the presence/absence of the candidate passage differs between̂𝑁𝑈(𝑞;𝜙,𝐾)and ̂𝑁𝑈(𝑞∣𝑑;𝜙,𝐾).
+Computation,batching,andcaching.IGPrequiresoneunconditionalrolloutand𝑁conditionalrolloutsperquery,
+i.e.,𝑁+1probingcallsto𝜙.Thiscostisembarrassinglyparallelacrosspassages(Alg.1,line2),andcanbeamortized
+inpracticeviabatchingovercandidatesandcachingtheunconditionalbaseline𝜈 0 (computedonceperquery).Whenthe
+generatorAPIreturnsonlyTOPKlog-probabilities,NU/IGcomputationremainsfeasibleandefficient,sinceEq.(2)–(3)
+use only the TOPK set and renormalization.
+Multi-evidenceinteractionsandscope.IGPevaluateseachpassageindependentlyviasingle-evidenceuncertainty
+reduction(Eq.(7)).Thisdesignkeepsthemethodlabel-freeandplug-and-play,butitdoesnotexplicitlymodelhigher-
+order interactions (e.g., two passages that are individually helpful but redundant together, or jointly needed for a key
+inference). In our setting, we rely on the downstreamtruncatebudget interface (TOPM and optional𝐵) plus the
+admission barrier𝑇𝑝 to mitigate obvious low-utility evidence before truncation, while preserving the simplicity and
+reproducibility of the generator-aligned scoring signal.
+4. Experiments
+We evaluateInformation Gain Pruning (IGP)as a drop-in replacement of thererankstage in a budgeted
+RAG pipeline (retrieve→rerank→truncate). We keep the corpus, candidate size, prompts/decoding, and
+Song et al.:Preprint submitted to ElsevierPage 8 of 26
+
+===== PAGE 25/26 =====
+Less is More for RAG
+I. Guyon et al. (Eds.),Advances in neural information processing systems(Vol. 30). Curran Associates, Inc. Retrieved fromhttps://
+proceedings.neurips.cc/paper_files/paper/2017/file/9ef2ed4b7fd2c810847ffa5fa85bce38-Paper.pdf
+Lewis, P., Perez, E., Piktus, A., Petroni, F., Karpukhin, V., Goyal, N., ... Kiela, D. (2020). Retrieval-augmented generation for knowledge-
+intensive nlp tasks. In H. Larochelle, M. Ranzato, R. Hadsell, M. Balcan, & H. Lin (Eds.),Advances in neural information processing systems
+(Vol.33,pp.9459–9474).CurranAssociates,Inc.Retrievedfromhttps://proceedings.neurips.cc/paper_files/paper/2020/file/
+6b493230205f780e1bc26945df7481e5-Paper.pdf
+Li, Z., Li, C., Zhang, M., Mei, Q., & Bendersky, M. (2024, November). Retrieval augmented generation or long-context LLMs? a comprehensive
+study and hybrid approach. In F. Dernoncourt, D. Preoţiuc-Pietro, & A. Shimorina (Eds.),Proceedings of the 2024 conference on empirical
+methodsinnaturallanguageprocessing:Industrytrack(pp.881–893).Miami,Florida,US:AssociationforComputationalLinguistics.Retrieved
+fromhttps://aclanthology.org/2024.emnlp-industry.66/doi: 10.18653/v1/2024.emnlp-industry.66
+Liu, N. F., Lin, K., Hewitt, J., Paranjape, A., Bevilacqua, M., Petroni, F., & Liang, P. (2024). Lost in the middle: How language models use
+long contexts.Transactions of the Association for Computational Linguistics,12, 157–173. Retrieved fromhttps://aclanthology.org/
+2024.tacl-1.9/doi: 10.1162/tacl_a_00638
+Mallen,A.,Asai,A.,Zhong,V.,Das,R.,Khashabi,D.,&Hajishirzi,H. (2023,July). Whennottotrustlanguagemodels:Investigatingeffectiveness
+of parametric and non-parametric memories. In A. Rogers, J. Boyd-Graber, & N. Okazaki (Eds.),Proceedings of the 61st annual meeting of the
+associationforcomputationallinguistics(volume1:Longpapers)(pp.9802–9822).Toronto,Canada:AssociationforComputationalLinguistics.
+Retrieved fromhttps://aclanthology.org/2023.acl-long.546/doi: 10.18653/v1/2023.acl-long.546
+Min,S.,Michael,J.,Hajishirzi,H.,&Zettlemoyer,L. (2020,November). AmbigQA:Answeringambiguousopen-domainquestions. InB.Webber,
+T. Cohn, Y. He, & Y. Liu (Eds.),Proceedings of the 2020 conference on empirical methods in natural language processing (emnlp)(pp. 5783–
+5797). Online: Association for Computational Linguistics. Retrieved fromhttps://aclanthology.org/2020.emnlp-main.466/doi:
+10.18653/v1/2020.emnlp-main.466
+Mündler,N.,He,J.,Jenko,S.,&Vechev,M.(2024).Self-contradictoryhallucinationsoflargelanguagemodels:Evaluation,detectionandmitigation.
+InThe twelfth international conference on learning representations.Retrieved fromhttps://openreview.net/forum?id=EmQSOi1X2f
+Nogueira, R., & Cho, K. (2019). Passage re-ranking with BERT.CoRR,abs/1901.04085.
+Nogueira, R., Jiang, Z., Pradeep, R., & Lin, J. (2020, November). Document ranking with a pretrained sequence-to-sequence model. In
+T. Cohn, Y. He, & Y. Liu (Eds.),Findings of the association for computational linguistics: Emnlp 2020(pp. 708–718). Online: Association
+forComputationalLinguistics. Retrievedfromhttps://aclanthology.org/2020.findings-emnlp.63/doi:10.18653/v1/2020.findings
+-emnlp.63
+Rajpurkar, P., Zhang, J., Lopyrev, K., & Liang, P. (2016, November). SQuAD: 100,000+ questions for machine comprehension of text. In J. Su,
+K.Duh,&X.Carreras(Eds.),Proceedingsofthe2016conferenceonempiricalmethodsinnaturallanguageprocessing(pp.2383–2392). Austin,
+Texas: Association for Computational Linguistics. Retrieved fromhttps://aclanthology.org/D16-1264/doi: 10.18653/v1/D16-1264
+Robertson, S., & Zaragoza, H. (2009). The probabilistic relevance framework: Bm25 and beyond.Foundations and Trends®in Information
+Retrieval,3(4), 333-389. Retrieved fromhttp://dx.doi.org/10.1561/1500000019doi: 10.1561/1500000019
+Shorinwa,O.,Mei,Z.,Lidard,J.,Ren,A.Z.,&Majumdar,A. (2025,September). Asurveyonuncertaintyquantificationoflargelanguagemodels:
+Taxonomy,openresearchchallenges,andfuturedirections.ACMComput.Surv.,58(3). Retrievedfromhttps://doi.org/10.1145/3744238
+doi: 10.1145/3744238
+Sun,W.,Yan,L.,Ma,X.,Wang,S.,Ren,P.,Chen,Z.,... Ren,Z. (2023,December). IsChatGPTgoodatsearch?investigatinglargelanguagemodels
+as re-ranking agents. In H. Bouamor, J. Pino, & K. Bali (Eds.),Proceedings of the 2023 conference on empirical methods in natural language
+processing(pp. 14918–14937). Singapore: Association for Computational Linguistics. Retrieved fromhttps://aclanthology.org/
+2023.emnlp-main.923/doi: 10.18653/v1/2023.emnlp-main.923
+Wang,H.,Prasad,A.,Stengel-Eskin,E.,&Bansal,M. (2025). Retrieval-augmentedgenerationwithconflictingevidence. InSecondconferenceon
+language modeling.Retrieved fromhttps://openreview.net/forum?id=z1MHB2m3V9
+Wang, W., Wei, F., Dong, L., Bao, H., Yang, N., & Zhou, M. (2020). Minilm: Deep self-attention distillation for task-agnostic compression of
+pre-trained transformers. In H. Larochelle, M. Ranzato, R. Hadsell, M. Balcan, & H. Lin (Eds.),Advances in neural information processing
+systems(Vol. 33, pp. 5776–5788). Curran Associates, Inc. Retrieved fromhttps://proceedings.neurips.cc/paper_files/paper/
+2020/file/3f5ee243547dee91fbd053c1c4a845aa-Paper.pdf
+Xiao,S.,Liu,Z.,Zhang,P.,Muennighoff,N.,Lian,D.,&Nie,J.-Y.(2024).C-pack:Packedresourcesforgeneralchineseembeddings.InProceedings
+of the 47th international acm sigir conference on research and development in information retrieval(p. 641–649). New York, NY, USA:
+Association for Computing Machinery. Retrieved fromhttps://doi.org/10.1145/3626772.3657878doi: 10.1145/3626772.3657878
+Xiong, M., Hu, Z., Lu, X., LI, Y., Fu, J., He, J., & Hooi, B. (2024). Can LLMs express their uncertainty? an empirical evaluation of confidence
+elicitation in LLMs. InThe twelfth international conference on learning representations.Retrieved fromhttps://openreview.net/
+forum?id=gjeQKFxFpZ
+Yu,Y.,Ping,W.,Liu,Z.,Wang,B.,You,J.,Zhang,C.,... Catanzaro,B. (2024). Rankrag:Unifyingcontextrankingwithretrieval-augmentedgener-
+ationinllms. InA.Globersonetal.(Eds.),Advancesinneuralinformationprocessingsystems(Vol.37,pp.121156–121184). CurranAssociates,
+Inc. Retrieved fromhttps://proceedings.neurips.cc/paper_files/paper/2024/file/db93ccb6cf392f352570dd5af0a223d3
+-Paper-Conference.pdfdoi: 10.52202/079017-3850
+Zhuang, H., Qin, Z., Hui, K., Wu, J., Yan, L., Wang, X., & Bendersky, M. (2024, June). Beyond yes and no: Improving zero-shot LLM rankers
+via scoring fine-grainedrelevance labels. In K.Duh, H. Gomez, & S. Bethard(Eds.),Proceedings of the 2024 conferenceof the north american
+chapter of the association for computational linguistics: Human language technologies (volume 2: Short papers)(pp. 358–370). Mexico
+City, Mexico: Association for Computational Linguistics. Retrieved fromhttps://aclanthology.org/2024.naacl-short.31/doi:
+10.18653/v1/2024.naacl-short.31
+Zhuang,S.,Liu,B.,Koopman,B.,&Zuccon,G.(2023,December).Open-sourcelargelanguagemodelsarestrongzero-shotquerylikelihoodmodels
+Song et al.:Preprint submitted to ElsevierPage 25 of 26
+
+===== PAGE 26/26 =====
+Less is More for RAG
+fordocumentranking. InH.Bouamor,J.Pino,&K.Bali(Eds.),Findingsoftheassociationforcomputationallinguistics:Emnlp2023(pp.8807–
+8817). Singapore:AssociationforComputationalLinguistics. Retrievedfromhttps://aclanthology.org/2023.findings-emnlp.590/
+doi: 10.18653/v1/2023.findings-emnlp.590
+Song et al.:Preprint submitted to ElsevierPage 26 of 26

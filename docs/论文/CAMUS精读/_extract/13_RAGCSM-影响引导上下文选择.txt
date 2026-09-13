@@ -1,0 +1,671 @@
+
+===== PAGE 1/28 =====
+Influence Guided Context Selection for Effective
+Retrieval-Augmented Generation
+Jiale Deng, Yanyan Shen∗, Ziyuan Pei, Youmin Chen, Linpeng Huang
+Shanghai Jiao Tong University
+{jialedeng, shenyy, pzy_live, chenyoumin, lphuang}@sjtu.edu.cn
+Abstract
+Retrieval-Augmented Generation (RAG) addresses large language model (LLM)
+hallucinations by grounding responses in external knowledge, but its effectiveness
+is compromised by poor-quality retrieved contexts containing irrelevant or noisy
+information. While existing approaches attempt to improve performance through
+context selection based on predefined context quality assessment metrics, they
+show limited gains over standard RAG. We attribute this limitation to their failure
+in holistically utilizing available information (query, context list, and generator)
+for comprehensive quality assessment. Inspired by recent advances in data se-
+lection, we reconceptualize context quality assessment as an inference-time data
+valuation problem and introduce the Contextual Influence Value (CI value). This
+novel metric quantifies context quality by measuring the performance degradation
+when removing each context from the list, effectively integrating query-aware rele-
+vance, list-aware uniqueness, and generator-aware alignment. Moreover, CI value
+eliminates complex selection hyperparameter tuning by simply retaining contexts
+with positive CI values. To address practical challenges of label dependency and
+computational overhead, we develop a parameterized surrogate model for CI value
+prediction during inference. The model employs a hierarchical architecture that
+captures both local query-context relevance and global inter-context interactions,
+trained through oracle CI value supervision and end-to-end generator feedback.
+Extensive experiments across 8 NLP tasks and multiple LLMs demonstrate that
+our context selection method significantly outperforms state-of-the-art baselines,
+effectively filtering poor-quality contexts while preserving critical information.
+Code is available athttps://github.com/SJTU-DMTai/RAG-CSM.
+1 Introduction
+Retrieval-Augmented Generation (RAG) has emerged as a powerful approach for mitigating hal-
+lucinations in large language models (LLMs) by grounding their responses in external knowledge
+sources [4, 19, 24]. A typical RAG pipeline consists of two core components: aretrieverthat searches
+for query-relevant contexts from external knowledge sources, and an LLMgeneratorthat produces
+responses using the retrieved contexts. Despite its advantages, RAG faces important challenges in
+practical applications. That is, external knowledge sources may contain substantial noisy data, and
+retrievers based on similarity metrics are inherently imperfect [54]. As a result, retrieved contexts
+often include irrelevant and noisy information [12, 54, 57]. This issue is particularly problematic as
+LLM generators tend to rely heavily on the provided contexts [ 12, 31, 38], potentially producing
+incorrect responses when provided with poor-quality contexts.
+Recent work [8, 20, 47, 57, 58] proposed context selection to shield generators from poor-quality
+contexts. This strategy depends oncontext quality assessment, which assigns a quality score to
+each context to guide the selection process. Without loss of generality, the contexts are evaluated
+∗corresponding author.
+arXiv:2509.21359v2  [cs.CL]  24 Oct 2025
+
+===== PAGE 2/28 =====
+𝒄𝟏: “Michael Richard Pence is the 48th 
+vice president of the United States 
+under President Donald Trump. ”
+“Who is the vice 
+president during 
+Donald Trump’s 
+second term of 
+US president? ”
+Query 𝒒
+“Pence is the vice 
+president under 
+president Trump.” 
+(parameterized, 
+earlier than 2024)
+Generator
+𝒄𝟐: “Donald Trump inaugurated as the 47th 
+President of the US on January 20, 2025. He 
+was the 45th president from 2017 to 2021.”
+Contexts
+𝒄𝟑: “In 2024, Trump defeated vice 
+president  Kamala Harris in the election 
+and was elected 47th President of the US.”
+𝒄𝟒: “Vance was elected in November 2024 and 
+was sworn in as the first millennial Vice President 
+of the United States on January 20, 2025. ”
+Context Quality
+Assessment 
+Context
+Selection
+𝒄𝟏,𝒄𝟑
+𝒄𝟏,𝒄𝟐
+𝒄𝟐,𝒄𝟑
+𝒄𝟐,𝒄𝟒
+𝒄𝟏 𝒄𝟐 𝒄𝟑 𝒄𝟒
+query-aware metric
+list-aware metric
+generator-aware metric
+contextual influence 
+⨁query
+⨁𝒒 Pence
+Pence
+Pence
+Vance
+⨁𝒒
+⨁𝒒
+⨁𝒒
+Generation
+𝒒 Pence
+high-quality
+poor-quality
+Figure 1: An example demonstrating different context quality metrics in practice.c2 and c4 are golden
+contexts containing crucial information about Trump’s second presidency and his vice president Vance.
+Query-aware metrics favor c1 and c3 due to their mentions of “Trump” and “vice president”. List-
+aware metrics score c2 and c4 higher by considering context relationships, but still favorc1.Generator-
+aware metrics assign low scores toc1 as it’s redundant with LLM knowledge. CI value, by integrating
+all three dimensions, correctly identifiesc 2 andc 4 as the most informative contexts.
+across three complementary dimensions: (1)query-aware metricthat measures the semantic
+relevance between context and query, implemented through point-wise rerankers [ 8, 20, 37, 41];
+(2)list-aware metricthat considers relationships among multiple contexts, optimized through
+pair-wise and list-wise rerankers [29, 30, 34, 36, 53] to prompt diversity and complementarity in
+the selected contexts; and (3)generator-aware metricthat evaluates how contexts align with the
+generator’s existing knowledge, using metrics such as log likelihood [ 51] or mutual information
+with generated responses [47, 57]. However, our empirical studies in Section 6.1 demonstrate that
+these metrics achieve limited effectiveness in context selection, sometimes even reducing RAG
+performance [19]. As illustrated in Figure 1, query-aware and list-aware metrics lack generator
+feedback, potentially selecting contexts that duplicate or contradict generator’s knowledge [12, 54].
+Meanwhile, generator-aware metrics ignore inter-context relationships, risking the omission of critical
+information. Moreover, selection parameters such as top- k (number of contexts to keep) must be
+specified in advance [18, 35], with optimal configurations varying significantly across different tasks,
+making it challenging to achieve ideal selection performance in practice.
+Recent progress in training data valuation has shown promising results for selecting high-quality
+training samples and enhancing ML model performance [17, 44]. One key data valuation metric is data
+influence [22, 56], which quantifies a sample’s importance by measuring the validation performance
+decrease when removed from the training set. Inspired by this, we reconceptualize context quality
+assessment as aninference-time data valuationproblem and introduce theContextual Influence
+value (CI value)for RAG context selection. Given a query q, context ci ∈C , and generator f, CI
+value is defined as ϕi(v) =v(f(q⊕C))−v(f(q⊕ {C\c i})), where ⊕ represents concatenation
+and v(f(·)) is a utility function that measures generator output quality (e.g., EM or F1 scores).
+CI value naturally satisfies four key desiderata: (1)query-awareness: query-irrelevant contexts
+leads to ϕi(v) = 0 , indicating that CI value implicitly captures query-context relevance; (2)list-
+awareness: by measuring list-wise marginal contribution, CI value rewards unique and essential
+information while penalizing redundant content; (3)generator-awareness: with generator feedback,
+CI value effectively distinguishes between contexts that enhance generator performance and those
+that diminish it; (4)ease-of-configuration: instead of requiring task-specific top- k tuning, CI value
+enables a straightforward selection strategy by keeping contexts with ϕi(v)>0 , i.e., those whose
+removal degrades performance.
+However, compared to data influence metrics in training data valuation, CI value computation faces
+two unique challenges. First, the utility evaluation v(·) depends on access to test labels, which
+are unavailable during inference. While some approaches attempt to estimate utility using model
+confidence, such heuristics often prove unreliable in practice [7]. Second, computing exact CI values
+2
+
+===== PAGE 3/28 =====
+requires n LLM forward passes for a n-length context list, substantially increasing inference latency.
+To address these challenges, we propose a CI Surrogate Model (CSM) that predicts CI values during
+inference. The CSM model is trained on the RAG training set and it can rapidly assign quality scores
+to contexts without requiring labels or multiple LLM calls. The approximation effectiveness of CSM
+depends on both its architecture and training strategy. Specifically, we employ a hierarchical structure
+that captures both local query-context relevance and global inter-context dependencies. For generator
+awareness, we explore two training strategies: (1) supervised learning using oracle CI values as
+targets, which provides implicit generator feedback; and (2) end-to-end training with the generator in
+the loop, which offers explicit signals about each context’s impact.
+We validate our framework through comprehensive experiments on 8 real-world NL tasks with 2
+LLM backbones. Results demonstrate that our CI value surpasses existing context quality metrics in
+identifying high-quality contexts and streamlining selection configuration. Moreover, our proposed
+CSM achieves 15.03% average improvement in RAG generation performance over leading baselines.
+2 Related Work
+Noise Robustness for RAG.RAG systems often encounter poor-quality retrieval results containing
+irrelevant and noisy information [47, 57]. These poor-quality contexts not only distract LLMs [54]
+but can also lead to incorrect responses, as LLMs tend to overly trust external information [12] and
+struggle with the “lost-in-the-middle” problem [27] when processing lengthy contexts. To address
+these challenges, recent research has pursued two main approaches. The first approach enhances
+model capabilities through supervised fine-tuning [ 12, 47, 54] or instruction tuning [ 48, 55] to
+improve LLM noise robustness, or implements sophisticated pipelines like self-ask mechanisms [2]
+to guide LLM self-reflection. However, these solutions face practical limitations: fine-tuning LLMs
+is computationally expensive, and complex pipelines increase inference latency. The second approach
+employs external filters to rerank [ 30, 34, 50] or refine [ 8, 20, 47, 51, 57, 58] retrieval results,
+shielding generators from poor-quality contexts. These methods utilize LMs or LLMs as context
+selection models, training them through supervised [ 51] or reinforcement learning [ 57] based on
+quality metrics derived from prior knowledge, such as query relevance [8, 20, 50], log likelihood [51],
+mutual information [47, 57], and so on. However, as discussed in Section 1, these quality metrics
+lacks comprehensive utilization of available information (query, context list, and generator), leading
+to suboptimal selection performance.
+Inference-Time Data Valuation.Data valuation metrics quantify each training example’s contribu-
+tion to model performance (e.g., its effect on validation accuracy), which is proven to be effective for
+data selection tasks that identify high-quality training samples to improve model performance. A
+fundamental approach is Leave-One-Out (LOO), which measures the performance degradation when
+removing a training sample, though it requires expensive retraining. Recent work has improved LOO
+through two main strategies: (1) influence-based methods [6, 14, 22, 56] that approximate LOO by us-
+ing gradient and Hessian matrix without full retraining; (2) Shapley value-based methods [13, 17, 44]
+that enhance fairness by modeling complex sample interactions through cooperative game theory.
+Recently, inference-time data valuation has emerged as new direction of data valuation, focusing on
+assessing data quality of inference data [7]. However, one cannot directly compute the utility due
+to the unknown labels during inference. While simple heuristics like model confidence are proven
+to be unreliable [7], current research trains utility prediction models (UPMs) with regression objec-
+tives to estimate oracle utility. UPMs have been proven effective in data selection tasks of various
+domains [7, 33, 46, 56]. However, UPMs do not directly optimize the predicted data valuation scores
+against ground truth values, suffering the risk of error accumulation and inaccurate approximation.
+3 Preliminaries
+Setup for RAG.A typical RAG system consists of a retriever and an LLM generatorf. Given a query
+q, the retriever retrieves a list of query-relevant contextsC={c 1, ..., cn} from an external knowledge
+base. The generator then takes both the query and the retrieved contexts as input to generate an
+answer ˆy. Formally, this can be expressed as ˆy=f(q⊕C) , where ⊕ denotes the combination of the
+query and the retrieved contexts, typically implemented as a simple concatenation.
+3
+
+===== PAGE 4/28 =====
+Utility Function.We quantify the effectiveness of retrieved contexts using a utility function v:
+2n →R , which maps any subset S⊂C to a real-valued score reflecting its usefulness for answering
+the query. For NLP tasks, the utility function is typically defined by comparing the model’s generated
+output against the ground-truth answers. Concretely, we set:
+vf,q(S) = max
+y∈Y
+−L(y, f(q⊕S)),(1)
+whereYis the set of correct answers, andLis the cross entropy loss.
+Definition 1 (Contextual Influence) Given query q, retrieved context list C and utility function v2,
+the contextual influence value (CI value) for a contextc i ∈Cis defined as:
+ϕi(v) =v(C)−v(C\c i).(2)
+CI value quantifies the utility change when ci is removed from the context list. Unlike previous
+metrics, it simultaneously captures three key aspects: query-awareness (through q), list-awareness
+(through interactions within C), and generator-awareness (through feedback from f). A positive CI
+value (ϕi(v)>0 ) indicates that removing ci degrades utility (or increases test loss), suggesting that
+ci positively contributes to generation quality, and vice versa. To ensure fair CI value, we remove
+semantically duplicate contexts fromCbefore computing CI values.
+Context Selection for RAG.It is commonly formulated as an optimization problem, whose objective
+is to maximize the utility of the generator based on the choice of retrieved contexts. Specifically,
+givenv, the objective of context selection is to identify a subsetS ∗
+v ⊂Cthat optimizes:
+S∗
+v = arg max
+S⊂C
+v(S).(3)
+However, solving Equation (3) presents significant challenges. The utility function v for the complex
+LLM generator lacks a tractable closed-form expression for analytical optimization. A brute-force
+approach that simply evaluates the utility of all possible subsets v(S) would necessitate 2n LLM
+generator forwards, which is computationally infeasible in practice asngrows large.
+Context Selection via CI value.To avoid the computationally intensive task of enumerating all
+possible subsets, we adopt a more practical approach by decomposing group influence into pointwise
+influence [11, 56]. Following previous research [44, 56], we aggregate contextual influences through
+summation: ϕ(v)[S] = P
+ci∈S ϕi(v). Therefore, the context selection strategy based on CI values
+aims to maximizeϕ(v)[S]as a proxy for optimizingv(S):
+ˆSϕ(v) = arg max
+S⊂C
+ϕ(v)[S].(4)
+Since ϕ(v)[S] = P
+ci∈S ϕi(v), ˆSϕ(v) consists of contexts with all positive CI values. That is,when
+using CI value for context selection, we select all contexts with positive CI values.
+4 Methodology
+4.1 CI Parameterization via Surrogate Model (CSM)
+As established, directly computing CI values during inference is infeasible due to label dependency
+and computational cost, requiring a CI surrogate model (CSM) for approximation. Due to the
+query-awareness and list-awareness of CI value, our CSM should effectively capture both local
+query-context relevance and global list-level interactions. Inspired by recent advances in list-wise
+neural rerankers [26, 32], we design CSM with a hierarchical structure (Figure 2) comprising three
+components: (1) a local layer based on BERT-uncased [10] for query-context pair modeling; (2) a
+global layer with self-attention; (3) an MLP-based output layer. Given q and C={c 1, ..., cn}, CSM
+first processes each query-context pair (q, ci) through the local layer to generate local embeddings
+L={l 1, ..., ln}, capturing semantic relationships between query and each context. These embeddings
+are then mean-pooled and fed into the global layer, where multi-head self-attention computes cross-
+context interactions to produce global embeddings G={g 1, ..., gn}. Finally, the output layer maps
+these global embeddings into relevance scoresM={m 1, ..., mn}.
+2We omit the subscriptsfandqfor simplicity.
+4
+
+===== PAGE 5/28 =====
+𝑀 = 𝑚1,…,𝑚𝑛
+CSM
+Query 𝑞 Quality scores 
+Generator
+𝛷 = 𝜙1,…,𝜙𝑛
+Oracle CI values 
+ST Loss
+𝓛𝐬𝐭 = 𝓛𝐦𝐬𝐞 +𝜷𝓛𝐜𝐭𝐬
+(b) Supervised Training (ST) 
+(c) End-to-end Training (E2E)
+Prediction E2E Loss
+𝓛𝐞𝟐𝐞 = 𝓛𝐬𝐮𝐟 +𝝀𝓛𝐧𝐞𝐜
+𝑙1
+𝑙2
+𝑙𝑛
+⋮
+𝑔1
+𝑔2
+𝑔𝑛
+⋮⋮
+𝑚1
+𝑚2
+𝑚𝑛
+⋮
+LocalLayer
+GlobalLayer OutputLayer
+𝑞 [SEP] 𝑐1
+𝑞 [SEP] 𝑐2
+𝑞 [SEP] 𝑐𝑛
+⋮
+(a) CSM Architecture Soft Context Selection
+: Trainable
+: Frozen
+𝐶 = 𝑐1,…,𝑐𝑛  
+Contexts
+Golden 
+Answers
+Figure 2: Overview of our proposed CSM: (a) CSM model architecture, (b) supervised training
+paradigm and (c) end-to-end training paradigm.
+To effectively approximate CI value using CSM, we then introduce two training paradigms to establish
+generator awareness of CSM: (1) supervised training that implicitly encodes generator feedback
+through oracle CI values; (2) end-to-end training that directly propagates generator gradients through
+differentiable soft context selection.
+4.2 Supervised Training of CSM
+Supervised training establishes intrinsically generator awareness through CI value supervision. We
+create a training dataset D={d 1, ..., d|D|} by collecting oracle CI values for all query-context pairs
+in RAG training dataset, where each sample di = (qi, Yi, Ci,Φ i) contains a query qi, the answer set
+Yi, contexts Ci ={c i1 , ..., cin }, their oracle CI values Φi ={ϕ i1 (v), ..., ϕin (v)}. Following data
+valuation research [7, 46, 56], we frame CSM training as a supervised regression task. However, as
+shown in Apendix A, the CI value distribution is severely imbalanced, with approximately 80% of
+contexts having near-zero CI values, while samples with high-CI and low-CI contexts are very rare
+(16%). This significant imbalance makes CSM training particularly challenging, which we address
+through both data and loss perspectives.
+From the perspective of data, we employ a combination of down sampling and data interventions.
+We first define the rarity rate of sample di as ri :=µ(Φ i) +α·σ(Φ i), where µ(·) and σ(·) represent
+the mean and standard deviation, respectively, and α is a balancing coefficient. Using two thresholds
+δ1 < δ2, we categorize samples into two distinct groups: (1) Trivial samples Dt (rti < δ1 for
+dti ∈ Dt), which predominantly contain non-informative contexts; (2) Hard samples Dh (rhi > δ2
+for dhi ∈ Dh), which contain contexts with high-CI or low-CI contexts. For the majority of trivial
+samples, we apply down sampling to reduce their dominance in the dataset. For hard samples, we
+implement cross-instance intervention to balance the data distribution by increasing the number of
+samples with both high-CI and low-CI contexts. Due to space limitations, we focus on describing
+the intervention for constructing samples with high-CI contexts; the analogous process for samples
+with low-CI contexts can be found in Appendix B. The intervention process begins by collecting
+hard samples with high-CI contexts, denoted as dhi = (qi, Ci ={C P
+i , CN
+i },Φ i), where CP
+i =
+{cik |ϕik (v)> γ} represents high-CI contexts ( γ >0 ) and CN
+i =C i\CP
+i . We then sample
+another instance dj = (qj, Cj,Φ j) whose query qj is semantically distinct from qi. Following the
+rationale-environment recombination approach [49], we create a new sample by:
+ˆdhi = (qi, Yi,{C P
+i ∪ ˆCj}, ˆΦi),(5)
+where ˆCj is sampled from Cj. This intervention strategy is based on the intuition that when
+informative contexts (CP
+i ) are placed in noisier environments (composed of ˆCj that are irrelevant
+to qi), their marginal contribution to the context list becomes more pronounced [ 40], resulting in
+elevated CI values for CP
+i . Through this process, we effectively construct additional samples with
+high-CI contexts, thereby enriching the training set with more informative samples.
+5
+
+===== PAGE 6/28 =====
+From the perspective of training, we implement a dual-loss strategy combining reweighted re-
+gression and contrastive learning. First, we mitigate majority class dominance through importance
+weighting:
+Lmse =E di∈D[(Si −Φ i)2/p(i)],(6)
+where p(i) represents the empirical frequency of ri in the training distribution. For hard samples, we
+employ a contrastive loss term to enhance their discriminative signal:
+Lcts =−E (q,Y,C,Φ)∈Dh Ec∈C
+
+log exp(gc ·g c+ /τ)P
+c−∈C− exp(gc ·g c−/τ) + exp(gc ·g c+ /τ)
+
+,(7)
+where anchor c is a context from hard samples, positive context c+ shares similar CI value with c
+(|ϕc(v)−ϕ c+ (v)|< ϵ1), negative contexts C− have divergent CI values fromc (|ϕc(v)−ϕ c−(v)|>
+ϵ2), and τ is a temperature hyperparameter. The final supervised training loss is the linear combination
+controlled by a hyperparameterβ:L st =L mse +βL cts.
+4.3 End-to-end Training of CSM
+End-to-end training explicitly injects generator awareness by directly using the generator’s output
+as a signal to optimize CSM’s parameters. We denote the training set of end-to-end training by
+E={(q i, Yi, Ci)}. A typical end-to-end training paradigm requires computing values for each
+context, selecting contexts S={c i|ϕi(v)>0} based on these values, and feeding the selected
+contexts to the generator for final answer generation. However, this context selection process is
+discrete and non-differentiable. To address this, we treat CSM’s output M as a mask and implement
+soft context selectionduring training by masking the generator’s input tokens with M. We employ
+the Gumbel-Softmax trick [9, 28, 40] to approximate a binary mask, i.e., ˆM= Gumbel(M) . The
+generator’s masked input is then reconstructed as:H=H q ⊕Hc, where Hq =f tok(q) represents the
+tokenized query and Hc = ˆM⊙f tok(C) denotes the masked tokenized context, with ftok(·) being
+the generator f’s tokenizer. Additionally, we construct the complementary masked tokenized context
+as Ht = (1− ˆM)⊙f tok(C), which effectively removes high-value contexts before tokenization.
+Then, to align mask values with CI value, we design following loss terms:
+Lsuf =−E (q,Y,C)∈E [Y T log(f(Hq ⊕H c)],(8)
+Lnec =E (q,Y,C)∈E [KL(Yunif, f(Hq ⊕H t)],(9)
+where KL(·) denotes the KL-Divergence and Yunif represents the uniform distribution. Lsuf encour-
+ages the generator to produce accurate responses when high-value contexts are provided, ensuring
+that these selected contexts contain sufficient information for answer correctly. Meanwhile, Lnec
+penalizes the CSM if the generator still generates correct answers even after the removal of high-value
+contexts, thereby discouraging false positive selections in the context selection process and ensuring
+that the high-value contexts are necessary for generating correct answers. The overall end-to-end
+training loss effectively approximates the CI value by combining both sufficiency and necessity
+through a linear combination controlled by hyperparameterλ:L e2e =L suf +λL nec.
+5 Experimental Setup
+Tasks and Datasets.We consider the following knowledge-intensive NLP tasks: (1) Open-Domain
+QA, including NQ [23], TriviaQA [21] and WebQA [3]. (2) Multihop QA that requires multi-step
+reasoning to generate answers, including HotpotQA [ 52] and 2WikiMultiHopQA [ 15]. (3) Fact
+Checking dataset FEVER [43] that challenges the model to use complex reasoning to determine the
+factual accuracy of given claims. (4) Multiple Choice dataset TruthfulQA [25]. (5) Long-Form QA
+dataset ASQA [39] that generating long and abstract answers given the question. Following [19, 47],
+we report Exact Match (EM) for Open-Domain QA datasets, F1 for Multihop QA and Long-Form
+QA datasets, and Accuracy for Fact Checking and Multiple Choice datasets.
+Baselines.We consider the following baselines: (1)Vanilla LLM: LLM without retrieval aug-
+mentation. (2)Standard RAG: a sequential RAG pipeline using FlashRAG [ 19] with retrieval
+(preserving all retrieved contexts). (3)bge-reranker[ 50]: a context selection baseline based on
+query-aware quality metrics. It leverages a cross-encoder to perform point-wise context reranking.
+(4)RankGPT[ 41]: a context selection baseline based on list-aware quality. It is a list-wise reranker
+6
+
+===== PAGE 7/28 =====
+0 1 2 3 4 5 6 7 8 9 10
+# of contexts selected
+0.25
+0.30
+0.35
+0.40EM
+Dataset: NQ
+0 1 2 3 4 5 6 7 8 9 10
+# of contexts selected
+0.50
+0.55
+0.60
+0.65EM
+Dataset: TriviaQA
+0 1 2 3 4 5 6 7 8 9 10
+# of contexts selected
+0.16
+0.18
+0.20
+0.22
+0.24EM
+Dataset: WebQA
+0 1 2 3 4 5 6 7 8 9 10
+# of contexts selected
+0.25
+0.30
+0.35
+0.40
+0.45F1
+Dataset: HotpotQA
+bge-reranker
+RankGPT
+RECOMP-ex.
+CI value
+Random
+(a) Context selection by adding high-quality contexts.
+0 1 2 3 4 5 6 7 8 9 10
+# of contexts selected
+0.15
+0.20
+0.25
+0.30
+0.35EM
+Dataset: NQ
+0 1 2 3 4 5 6 7 8 9 10
+# of contexts selected
+0.450
+0.475
+0.500
+0.525
+0.550
+0.575
+0.600EM
+Dataset: TriviaQA
+0 1 2 3 4 5 6 7 8 9 10
+# of contexts selected
+0.12
+0.14
+0.16
+0.18EM
+Dataset: WebQA
+0 1 2 3 4 5 6 7 8 9 10
+# of contexts selected
+0.25
+0.30
+0.35
+0.40F1
+Dataset: HotpotQA
+bge-reranker
+RankGPT
+RECOMP-ex.
+CI value
+Random
+(b) Context selection by adding poor-quality contexts.
+Figure 3: RAG generation performance when selecting contexts using different quality metrics. (a)
+Selecting high-quality contexts, where higher curve indicates better metric. (b) Selecting poor-quality
+contexts, where lower curve indicates better metric. Dashed line marks the top-k cutoff where the
+average CI value is zero and star marks the top-k yielding best performance. For baselines, we use
+predicted scores for bge-reranker and RankGPT, and oracle log likelihood scores for RECOMP-ex.
+that feeds the whole list into LLM and generates a ordered context list based on their relevance to
+query. We use the generator LLM as the lit-wise reranker in our experiments. (5)RECOMP-ex[ 51]:
+a context selection baseline based on generator-aware quality metrics. Given query q, context ci and
+ground truth answer y, the quality score of ci is logp f (y|[q⊕c i]). It employs the oracle scores train
+a BERT-based context selection model with contrastive learning. (6)RECOMP-abs[ 51]: a context
+summarization baseline by distilling a lightweight abstractive compressor from extreme-scale teacher
+LLMs like GPT-3.5. (7)Ret-Robust[ 54]: a generator enhancing baseline by fine-tuning the LLM
+via LoRA [16] to be robust to external noise. (8)Self-RAG[ 2]: an agentic baseline that performs
+on-demand retrieval and learns to reflect on retrieved contexts while critiquing generated answers.
+(9)RQ-RAG[ 5]: an agentic baseline that enhances the RAG pipeline through explicit rewriting,
+decomposition, and disambiguation. (10)oracle CI value: context selection based on oracle CI
+value, and (11)CSM-standCSM-e2e: the CI Surrogate Model for context selection, trained by Lst
+andL e2e, respectively.
+Implementation Details.To demonstrate the versatility of our method, we choose two backbones
+differing in architecture: Llama3-8b-intruct [1] and Qwen2.5-7b-instruct [42]. For the retrieval corpus,
+we utilize the Wikipedia dump from December 2018, and pre-process it into chunks (100 words
+per chunk). We use E5-base-v2 [45] as the dense retriever and retrieve the top 10 chunks from all
+Wikipedia chunks. We follow the FlashRAG benchmark[19] for data, splits and baselines (including
+Vanilla LLM, Standard RAG, bge-reranker and RECOMP). We conducted all the experiments on
+a server equipped with Montage Jintide(R) C6226R CPU, 256GB Memory, and 4 Nvidia GeForce
+RTX 4090 GPUs. Detailed setup of our method can be found in Appendix C.3.
+6 Experimental Results
+6.1 Effectiveness of CI value
+This part of experiments aims to prove that CI value serves as an effective metric for context selection,
+as it eliminates the need for complex top-k configuration and directly correlates with RAG generation
+7
+
+===== PAGE 8/28 =====
+Table 1: RAG generation performance (%) on 8 downstream tasks with different baselines. The
+best results are inboldand the second best are with underscore. The oracle CI values with asterisk
+superscript act as a performance reference of our proposed CSM.
+NQ TriviaQA WebQA HotpotQA 2Wiki FEVER TruthfulQA ASQA
+Task type Open-Domain QA
+(EM)
+Multihop QA
+(F1)
+Fact Check.
+(Acc)
+Multiple Choice
+(Acc)
+Long-Form QA
+(F1)
+Llama3-8B
+Vanilla LLM 20.58 52.87 16.39 24.27 23.51 71.52 30.11 31.34
+Standard RAG 37.01 62.36 18.21 40.95 24.38 90.76 27.05 34.70
+bge-reranker 39.06 64.17 18.85 41.96 25.92 90.57 28.64 33.97
+RankGPT 38.61 61.83 19.24 41.5327.2678.58 30.1135.21
+RECOMP-ex 29.86 60.67 18.36 39.06 24.55 - - -
+RECOMP-abs 32.85 58.77 18.70 39.94 25.57 90.66 30.60 34.02
+Ret-robust 41.77 65.83 19.76 45.69 25.91 90.69 27.05 34.50
+Self-RAG 36.23 38.26 21.83 29.98 25.43 85.77 29.75 32.56
+RQ-RAG 34.27 55.3126.1235.22 26.08 90.13 27.36 33.64
+CSM-st42.53 69.5924.7747.5325.9791.39 30.9734.75
+CSM-e2e 41.61 67.88 26.05 45.61 26.48 90.74 30.56 33.68
+oracle CI val. 45.79∗ 71.98∗ 27.81∗ 48.28∗ 30.72∗ 94.58∗ 32.09∗ 35.70∗
+Qwen2.5-7B
+Vanilla LLM 14.88 41.75 16.54 26.48 29.44 79.61 27.01 30.21
+Standard RAG 38.50 63.29 21.51 44.81 33.68 91.14 23.26 33.46
+bge-reranker 39.53 63.76 21.70 45.59 34.48 91.05 25.34 33.00
+RankGPT 39.14 63.07 21.21 45.70 35.81 90.20 25.83 34.98
+RECOMP-ex 35.76 61.08 20.28 42.04 32.47 - - -
+RECOMP-abs 31.80 59.26 20.37 42.27 33.57 91.33 32.0734.70
+Ret-robust 42.77 64.65 28.52 44.20 36.98 91.10 23.25 33.57
+Self-RAG 44.93 63.29 28.48 45.69 43.27 90.05 27.17 33.28
+RQ-RAG 45.72 64.33 26.47 49.62 42.75 91.27 28.06 34.59
+CSM-st47.3865.26 28.54 51.95 48.67 92.9828.77 34.05
+CSM-e2e 46.19 66.3526.38 49.44 47.23 91.02 27.7235.62
+oracle CI val. 50.64∗ 69.19∗ 30.61∗ 53.78∗ 49.08∗ 94.63∗ 28.56∗ 36.72∗
+performance: selecting high-CI contexts improves the performance while low-CI contexts degrade it.
+Case studies and detailed experiments on other datasets are provided in Appendix D and E.
+Top-k Configuration.As illustrated in Figure 3a, leveraging CI value as context selection metric
+eliminates the need for top-k tuning, as simply preserving contexts with positive CI values consistently
+achieves optimal or near-optimal RAG performance. In contrast, other metrics require dataset-specific
+top-k configurations, with optimal values varying significantly across datasets (e.g., bge-reranker’s
+optimal top-k ranges from 1 for NQ to 10 for TriviaQA). This dataset-dependent variation makes
+it challenging to determine a universal top- k value that performs well across different datasets,
+highlighting the practical advantage of CI value in context selection.
+Context Selection by Adding High-Quality Contexts.The high-quality selection experiment is
+performed with the following steps [17]: For each context quality metric, we preserve a candidate
+context set S. S=∅ initially. We select contexts from the retrieved contexts in descending order
+of the quality scores and add them to S. Each time the contexts are selected, we leverage current
+S as the reference of generator to answer user queries, evaluate the answer quality using metrics in
+Section 5 and plot the performance curve. In an ideal scenario, selecting the most helpful contexts
+first should produce a sharp initial performance increase, followed by a decline as lower-quality
+contexts are included in S. Figure 3a illustrates the RAG performance curves from this experiment,
+with higher curves indicating superior quality metrics. All metrics outperform the random baseline,
+confirming their effectiveness in identifying high-quality contexts. CI value-based selection shows
+a consistent pattern aligning with the ideal pattern across datasets, while other baselines exhibit
+fluctuating performance asSgrows.
+Context Selection by Adding Poor-Quality Contexts.We conduct poor-quality context selection
+experiments following a similar procedure to high-quality selection, but with contexts added in
+ascending order of their quality scores. In contrast to high-quality selection, the ideal performance
+curve should initially decline sharply as poor-quality contexts are incorporated into S, then gradually
+improve as higher-quality contexts are added. Figure 3b illustrates the RAG performance curves from
+this experiment, with lower curves indicating superior quality metrics. All metrics outperform the
+random baseline, confirming their effectiveness in identifying poor-quality contexts. Experimental
+8
+
+===== PAGE 27/28 =====
+“… By the end of the decade, Toyota had established a worldwide presence, as the company had exported 
+its one-millionth unit. The first Japanese vehicles to arrive in North America were five Land Cruisers in El 
+Salvador in May 1953. ”
+𝑐1
+“…Toyota's first export to the United States began with 30 Crown Deluxe's in June 1958 after establishing 
+Toyota Motor Sales USA the previous October, the first directly managed retail dealer (Hollywood Toyota) 
+the previous February, U.S. wholesale and import companies.”
+𝑐2
+“…However, when Toyota eventually entered the American market in 1957 with the Crown, the name was 
+not well received due to connotations of toys and pets. The name was soon dropped for the American 
+market, but continued in other markets until the mid-1960s…”
+𝑐3
+“The history of Toyota started in 1933 with the company being a division of Toyoda Automatic Loom Works 
+devoted to the production of cars under the direction of the founder's son, Kiichiro Toyoda. Kiichiro Toyoda 
+had traveled to Europe and the United States in 1929 to investigate automobile production and had begun 
+researching gasoline-powered engines in 1930. Toyoda Automatic Loom Works was encouraged to develop 
+automobile production by the Japanese government, which needed domestic vehicle production, due to 
+the war with China.”
+𝑐4
+⋯
+Query: When did Toyota first come to the United States?
+Golden Answer: 1957
+Prediction w/ full contexts: May 1953
+Prediction w/ contexts of positive CI values: 1957
+Retrieved Contexts
+𝝓𝟏 𝒗 = −𝟎.𝟏𝟗
+𝝓𝟐 𝒗 = −𝟎.𝟏𝟒
+𝝓𝟑 𝒗 = 𝟏.𝟎𝟏
+𝝓𝟒 𝒗 = 𝟎.𝟎𝟎
+Figure 9: Case study (test case #138 in NQ dataset) with Llama3-8B as LLM generator.
+“… Ratatouille won the Best Animated Feature award at the 2008 Golden Globes; it was also nominated for 
+5 Academy Awards, including Best Animated Feature and Best Original Screenplay. On February 24, 2008, 
+Ratatouille won Bird his second Academy Award for Best Animated Feature Film.. ”
+𝑐1
+“Golden Globe Award for Best Animated Feature Film The Golden Globe Award for Best Animated Feature 
+Film was awarded for the first time at the 64th Golden Globe Awards in 2007. It was the first time that the 
+Golden Globe Awards had created a separate category for animated films since its establishment. The 
+nominations are announced in January and an awards ceremony is held later in the month. Initially, only 
+three films are nominated for best animated film, in contrast to five nominations for the majority of other 
+awards. The Pixar film Cars was the first recipient of the award”
+𝑐2
+“At the 81st Academy Awards, in which WALL-E won the award but was not nominated for Best Picture, 
+despite receiving widespread acclaim from critics and audiences and being generally considered one of the 
+best films of 2008…”
+𝑐3
+“…In 2007, Pixar released Meet the Robinsons, which experienced a poor response at the box office despite 
+the lukewarm critical and audience reception. The following film, 2008's Bolt had the best critical reception 
+of any Disney animated feature since Lilo & Stitch, and became a moderate success.”
+𝑐4
+⋯
+Query: Which film won the Oscar for best animated feature in 2007?
+Golden Answer: Ratatouille
+Prediction w/ full contexts: Cars
+Prediction w/ contexts of positive CI values: Ratatouille
+Retrieved Contexts
+𝝓𝟏 𝒗 = 𝟎.𝟓𝟕
+𝝓𝟐 𝒗 = −𝟎.𝟏𝟒
+𝝓𝟑 𝒗 = −𝟎.𝟎𝟐
+𝝓𝟒 𝒗 = 𝟎.𝟎𝟑
+Figure 10: Case study (test case #143 in NQ dataset) with Llama3-8B as LLM generator.
+27
+
+===== PAGE 28/28 =====
+“The Seven Days Battles were a series of seven battles over seven days from June 25 to July 1, 1862, near 
+Richmond, Virginia, during the American Civil War. Confederate General Robert E... ”
+𝑐1
+“The Battle of Manila (Filipino: Labanan sa Maynila; ), the first and largest battle of the Philippine–American 
+War, was fought on February 4–5, 1899, between 19,000 American soldiers and 15,000 Filipino armed 
+militiamen… ”
+𝑐2
+“The Battle of Manila (Filipino: Labanan sa Maynila) (1365) is an unspecified and disputed battle occurring 
+somewhere in the vicinity of Manila between the forces of the kingdoms in Luzon and the Empire of 
+Majapahit…”
+𝑐3
+“…Websites Battles of La Naval de Manila The Battles of La Naval de Manila () were a series of five naval 
+battles fought in the waters of the Philippines in the year 1646, in which the forces of Spain repelled various 
+attempts by forces of the Dutch Republic to invade Manila, during the Eighty Years' War. The Spanish forces, 
+which included many native Kapampángan volunteers, consisted of two, and later, three Manila galleons, a 
+galley and four brigantines...”
+𝑐4
+⋯
+Query: Which was fought earlier in US history, the Seven Days Battles or the Battle of Manila?
+Golden Answer: The Seven Days Battles
+Prediction w/ full contexts: The Battle of Manila (1365)
+Prediction w/ contexts of positive CI values: The Seven Days Battles
+Retrieved Contexts
+𝝓𝟏 𝒗 = 𝟎.𝟐𝟏
+𝝓𝟐 𝒗 = 𝟎.𝟐𝟑
+𝝓𝟑 𝒗 = −𝟎.𝟑𝟐
+𝝓𝟒 𝒗 = −𝟎.𝟏𝟒
+Figure 11: Case study (test case #157 in HotpotQA dataset) with Llama3-8B as LLM generator.
+ϕ4(v) =−0.14 ). These contexts could lead the generator to produce incorrect answers. In contrast,
+contexts c1 and c2, which contain the correct temporal information about both the Seven Days Battles
+and the relevant Battle of Manila, are assigned positive CI values (ϕ1(v) = 0.21 and ϕ2(v) = 0.23).
+The retention of these contexts enables the generator to produce the correct answer.
+28

@@ -1,0 +1,880 @@
+
+===== PAGE 1/15 =====
+Zero-RAG: Towards Retrieval-Augmented Generation with Zero
+Redundant Knowledge
+Qi Luo1,∗ Xiaonan Li1,∗ Junqi Dai1 Shuang Cheng1 Yining Zheng1 Xipeng Qiu1,2,†
+1School of Computer Science, Fudan University
+2Shanghai Innovation Institute
+qiluo22@m.fudan.edu.cn
+Abstract
+Retrieval-Augmented Generation has shown re-
+markable results to address Large Language
+Models’ hallucinations, which usually uses a
+large external corpus to supplement knowledge
+to LLMs. However, with the development of
+LLMs, the internal knowledge of LLMs has
+expanded significantly, thus causing significant
+knowledge redundancy between the external
+corpus and LLMs. On the one hand, the in-
+dexing cost of dense retrieval is highly related
+to the corpus size and thus significant redun-
+dant knowledge intensifies the dense retrieval’s
+workload. On the other hand, the redundant
+knowledge in the external corpus is not helpful
+to LLMs and our exploratory analysis shows
+that it instead hurts the RAG performance on
+those questions which the LLM can answer
+by itself. To address these issues, we propose
+Zero-RAG to tackle these challenges. Specifi-
+cally, we first propose the Mastery-Score metric
+to identify redundant knowledge in the RAG
+corpus to prune it. After pruning, answers to
+"mastered" questions rely primarily on inter-
+nal knowledge of the LLM. To better harness
+the internal capacity, we propose Query Router
+and Noise-Tolerant Tuning to avoid the irrele-
+vant documents’ distraction and thus further im-
+prove the LLM’s utilization of internal knowl-
+edge with pruned corpus. Experimental results
+show that Zero-RAG prunes the Wikipedia cor-
+pus by 30% and accelerates the retrieval stage
+by 22%, without compromising RAG’s perfor-
+mance.
+1 Introduction
+Retrieval-Augmented Generation (RAG) has be-
+come a important research topic to address
+Large Language Models’ (LLMs) hallucination is-
+sues(Lin et al., 2022; Wang et al., 2023; Gao et al.,
+2024; Fan et al., 2024; Li et al., 2024; Yu et al.,
+2024). By integrating the internal knowledge of
+LLMs with a comprehensive range of external in-
+formation, RAG enables LLMs to significantly en-
+HotpotQA TriviaQA EQ NQ0
+20
+40
+60
+80
+100EM
+(a) Exact Match (EM) recall on four
+Wikipedia-based QA datasets, evaluated us-
+ing Llama3.3-70B, shows a substantial over-
+lap between the model’s knowledge and
+Wikipedia.
+TriviaQA HotpotQA EQ60
+70
+80
+90
+100EM
+without RAG
+with RAG
+(b) Comparison of performance on previously
+mastered questions: without versus with re-
+dundant knowledge retrieval.
+Figure 1: Overview of knowledge redundancy: (a)
+shows the overlap between LLM and corpus knowl-
+edge; (b) indicates that a large part of LLM knowledge
+is derived from Wikipedia; (c) reveals that redundant
+knowledge degrades performance on originally correct
+responses.
+hance their factual accuracy while generating high-
+quality, informative responses (Asai et al., 2023; Li
+et al., 2024).
+RAG usually integrates the LLM with a large ex-
+ternal corpus (Borgeaud et al., 2022), which leads
+to a high heavy overload. With the development
+of LLMs, (Grattafiori et al., 2024; DeepSeek-AI
+et al., 2025; Team et al., 2024) the internal knowl-
+edge of LLMs increases. For example, existing
+research has shown that the LLM’s knowledge den-
+sity doubles every 100 days (Xiao et al., 2024).
+And thus more and more knowledge in the external
+corpus becomes redundant. As shown in Figure 1a,
+Llama3.3-70B can achieve at least 40% accuracy
+on Wikipedia-related questions, which shows sig-
+arXiv:2511.00505v2  [cs.CL]  4 Nov 2025
+
+===== PAGE 2/15 =====
+nificant redundancy between the external corpus
+and the LLM’s knowledge.
+In this paper, we focus on addressing the chal-
+lenges of redundant knowledge between the exter-
+nal corpus and the LLM. On the one hand, the en-
+coding and indexing workload of dense retrieval is
+highly related to the corpus size, and thus massive
+redundant knowledge intensify the dense retrieval’s
+workload. On the other hand, the redundant knowl-
+edge in the external corpus is not helpful to the
+LLM, since the LLM contain that knowledge in
+parameters. Additionally, our exploratory exper-
+iment shows that the redundant knowledge even
+hurts the performance. Specifically, we evaluate
+the LLM’s performance on questions it has mas-
+tered when redundant knowledge is included. We
+filter questions that the LLM can correctly answer
+by itself and observe the accuracy when the cor-
+responding passage is added to its context. The
+results are shown in Figure 1b. We find adding the
+redundant knowledge to the LLM instead degrades
+its performance by about 20 points. Although the
+corresponding knowledge is supplemented to the
+LLM, it instead hurts the LLM’s performance on
+those mastered questions. This shows that the re-
+dundant knowledge may distract the LLM and hin-
+der it from utilizing corresponding knowledge.
+To address these issues, we proposeZero-RAG
+to reduce knowledge redundancy between the cor-
+pus and the LLM and thus prune the redundant
+knowledge without compromising RAG’s perfor-
+mance. Specifically, we proposeMastery-Score
+to measure how well the LLM masters a corpus
+passage and to prune those passages with high
+Mastery-Scores. In this way, we can significantly
+reduce the corpus size and retain the necessary
+knowledge in the corpus. After the corpus pruning,
+answering questions already mastered by the LLM,
+relies primarily on their internal knowledge. There-
+fore, we further propose the following two modules
+to help the LLM better utilize its internal knowl-
+edge under pruned corpus:Query Router:it first
+determines whether the LLM can answer the ques-
+tion by itself and let the LLM directly answer those
+mastered questions, which can help the LLM avoid
+the distraction of irrelevant documents and better
+utilize its internal knowledge;Noise-Tolerant Tun-
+ing:this makes LLM more robust and correctly
+utilize internal knowledge when the irrelevant docu-
+ments are retrieved and put to its context. Through
+the synergy between the query router and noise-
+LLMKnowledgeRedundantKnowledgeCorpusKnowledge
+Figure 2: Relationship between model-internal knowl-
+edge and corpus knowledge. The left circle denotes
+the knowledge already encoded in the language model
+(KM), while the right circle denotes the out-of-model
+corpus D. Their intersection, Dredundant, contains facts
+duplicated in both sources and is therefore a prime tar-
+get for pruning duringZero-RAG
+robust tuning, Zero-RAG can make the LLM better
+utilize its internal knowledge when the external
+corpus is significantly pruned. We summarize our
+contributions as follows:
+• To the best of our knowledge, Zero-RAG is
+the first to explore RAG-oriented corpus prun-
+ing by removing the knowledge redundancy
+between the corpus and the LLM, without
+compromising RAG’s performance
+• Experimental results on four Fact-intensive
+QA datasets show that Zero-RAG can signifi-
+cantly prune 30% of the external corpus, ac-
+celerate the retrieval by 22% and retain the
+RAG’s performance.
+• We will release the code, model, and pruned
+corpus. We hope that Zero-RAG can inspire
+researchers of the important design choices
+about pruning RAG corpus and pave the way
+for further improvements.
+2 Task Definition
+We formally define the problem of redundant
+knowledge in Retrieval-Augmented Generation
+(RAG) as follows. Given an external corpus D=
+{di}|D|
+i=1 and an LLM whose internal knowledge
+is encoded within its parameters, knowledge re-
+dundancy occurs when passages in D overlap sig-
+nificantly with the knowledge mastered by the
+LLM(see Figure 2). Such redundancy increases
+retrieval costs and may degrade LLM performance
+by introducing distracting or unnecessary context.
+Our goal is thus to identify and prune redundant
+knowledge to produce a concise corpus Dretained ⊂
+2
+
+===== PAGE 3/15 =====
+D, minimizing retrieval overhead without substan-
+tially compromising RAG effectiveness:
+Dredundant ={d i ∈ D |Overlap(di,KM)≤τ},
+(1)
+Dretained =D \ Dredundant.(2)
+where Overlap(di,KM) measures the degree of
+overlap between document di and the model’s in-
+ternal knowledgeK M.
+3 Zero-RAG
+RAG usually augments LLMs’ knowledge by sup-
+plementing it with information from an external
+corpus. With the development of LLMs (Xiao
+et al., 2024), the LLM’s internal knowledge has
+increased significantly and thus causes significant
+knowledge redundancy between the RAG corpus
+and LLMs, which not only intensifies the retrieval’s
+workload but also degrades the RAG performance
+(see Figure 1b). In this section, we propose Zero-
+RAG to address these issues. In Zero-RAG, we first
+propose Mastery-Score to measure how well the
+LLM masters a passage from the corpus with high
+Mastery-Scores. After the corpus pruning, answer-
+ing mastered questions mainly relies on LLM’s
+internal knowledge. Therefore, we further propose
+Query Router and Noise-Tolerant Tuning to help
+the LLM better utilize its internal knowledge with
+the pruned corpus. We introduce these modules
+and the overall pipeline as follows.
+3.1 Mastery-Score
+Existing works usually use loss-based strategies
+to probe whether the LLM memorizes a specific
+piece of knowledge(Fang et al., 2024; Chen et al.,
+2024; Ding et al., 2023; Peng et al., 2023). How-
+ever, memorizing the knowledge doesn’t ensure
+mastering it. Allen-Zhu and Li (2024) finds that
+when the LLM memorizes a specific knowledge,
+it may not be able to use it after Supervised Fine-
+Tuning (SFT). To address this issue, we propose
+master-score to identify whether the LLM can flex-
+ibly utilize the knowledge after SFT. Given each
+passage’s Mastery-Score, we can prune those docu-
+ments with high Master-Score to reduce the knowl-
+edge redundancy between RAG corpus and LLM.
+We illustrate the process of computing the
+Mastery-Score in Figure 3. For any sentence s,
+we calculate its Mastery-ScoreM(s)in two steps:
+Construct QA Pairs:Use an LLM to generate
+n question-answer pairs {(qi, ai)}n
+i=1 from s. The
+number n is chosen based on the complexity of
+s, ensuring that each question qi can be answered
+directly usings.
+Compute the Score:Calculate the average Exact
+Match (EM) score over thenpairs:
+M(s) = 1
+n
+nX
+i=1
+EM
+ 
+ai, L(qi)
+
+,(3)
+where L(qi) is the answer generated by the LLM
+for question qi, EM(ai, L(qi)) is the Exact Match
+score.
+Since the mastery-score measures how well the
+LLM can answer questions related to the knowl-
+edge, it naturally reflects how well the LLM can
+utilize the knowledge after SFT.
+Corpus Pruner Learning:Measuring the
+mastery-score on one sentence may require several
+times LLM inference and directly applying it
+to the whole RAG corpus requires infeasible
+computational resources. We thus propose a
+mastery-classifier to address this issue. The
+core idea is using a neural classifier to predict
+the Mastery-Score for each sentence, which
+quantifies how well the language model L masters
+the information in sentence si. The score is
+normalized to the range [0,1] , where 0 indicates
+complete redundancy and 1 indicates critical
+information.
+Due to the high cost of annotating every sentence
+in the Wiki dataset, we design a regression model
+fθ :s i 7→ˆmi to predict the Mastery-Score.
+We construct a training set D={(s i, mi)}N
+i=1,
+where mi is the ground truth Mastery-Score for
+sentence si. The regression model is trained by
+minimizing the Mean Squared Error (MSE):
+L(θ) = 1
+N
+NX
+i=1
+
+fθ(si)−m i
+2
+,(4)
+where fθ(si) is the predicted Mastery-Score for
+si, mi is the true Mastery-Score for si, θ denotes
+the model parameters.
+The output ˆmi =f θ(si) represents the proba-
+bility that sentence si is redundant. We prune a
+sentence when ˆmi < τ(a preset threshold). The
+complete corpus pruning procedure is detailed in
+Appendix A.1.
+3
+
+===== PAGE 4/15 =====
+S: Queen Victoria became Empress of India in 1876.
+Generate Question Answer pairs
+S：Queen Victoria became Empress of India in 1876.Mastery-Score: 0.75
+Queen Victoria1878 Empress of India
+IndiaGenerate Model response
+Get Mastery-Score
+Sample WikiSentence
+Q: Who became Empress of India in 1876?A: Queen Victoria
+Q: In what year did Queen Victoria become Empress of India?A: 1876
+Q: What title did Queen Victoria acquire in 1876?A: Empress of India
+Q: Which country was Queen Victoria declared Empress of in 1876?A: India
+Figure 3: Mastery-Score Construction Pipeline: For a given sentence, the mastery score is computed in four steps:
+(1) sampling candidate sentences from Wikipedia; (2) generating n QA pairs for each sentence; (3) evaluating LLM
+performance on these QA pairs; and (4) calculating the final score based on the LLM’s responses.
+3.2 Query Router
+Even with pruning, some queries may still trig-
+ger retrieval of irrelevant documents—particularly
+if the LLM itself can answer a query without ex-
+ternal context. In such cases, retrieval not only
+brings noise but also increases the overall latency.
+Therefore, Zero-RAG employs aquery routerto
+determine whether a query requires additional in-
+formation from the database. If the LLM can confi-
+dently answer using its internal knowledge alone,
+the query bypasses the retriever entirely. By selec-
+tively routing only queries that need external con-
+text, we reduce both computational overhead and
+the risk of retrieving noisy, off-topic documents.
+Next, we will explain how to train the Query Router
+by discussing both data construction and the learn-
+ing process.
+Data Collection for query routerFor a down-
+stream dataset, we first evaluate the dataset using
+the Noise-Tolerant model to determine the model’s
+performance with various queries. Based on the
+model’s performance, we assign a classification la-
+bel—eithermasteredorunmastered—to each data
+point. These labels represent whether the model
+is already knowledgeable about the corresponding
+question. Using this labeled dataset, we train a
+classifier to develop the Question Pruner.
+Query router LearningWe train the query
+router using a binary classification approach, where
+each query is labeled to indicate whether the model
+already possesses sufficient knowledge to answer it.
+The loss function employed for training the query
+router is defined as:
+L(θ) =− 1
+N
+NX
+i=1
+yi logf i,(5)
+By accurately determining the familiarity of the
+model with the current query, the query router effec-
+tively prevents unnecessary access toDunmastered.
+3.3 Noise-Tolerant Tuning
+Despite corpus pruning and query routing, there
+may be scenarios in which a query genuinely re-
+quires a pruned document or inadvertently retrieves
+unrelated content. To mitigate the adverse effects of
+such “noisy” documents, we adopt anoise-tolerant
+fine-tuning scheme. Under this scheme, the model
+is explicitly trained to disregard or downweight
+irrelevant documents while relying on its internal
+knowledge. This further increases Zero-RAG’s
+robustness: even when the retrieved documents
+are partially or fully unrelated, the model can still
+produce accurate answers by leveraging its own
+learned information. Next, we explain how to im-
+plement Noise-Tolerant Tuning by detailing both
+the data construction and training processes.
+Data collection for Noise-Tolerant tuningWe
+design training samples in three formats:
+• Sample with relevant docs: Query q with rele-
+vant documentsr p and answera.
+• Sample with noise docs: Query q with dis-
+tracting documentsr n and answera.
+• Sample without RAG: Query q with answer
+a.
+Our fine-tuning loss then unifies these formats
+as:
+4
+
+===== PAGE 5/15 =====
+Query Routing
+Retrieval
+Inference
+Noise-Tolerant
+Mastered
+Unmastered
+Query Router Training
+Inference
+Train
+ Corpus PrunerRaw CorpusNon-Redundant Corpus
+Corpus PruningTrain
+Sample Redundant Corpus
+QueryAnswerDocs
+QueryAnswerNoise-Docs
+Q: Who owns World of Coca-Cola?
+QueryAnswer
+Sample with relevant-docs:
+Sample with noise-docs:
+Sample Without RAG:
+Q: Who owns World of Coca-Cola?
+Noise-Tolerant Tuning
+Train
+Q: Who owns World of Coca-Cola?A: The Coca-Cola CompanyI: The answer is the Coca-Cola Company
+Non-Redundant Corpus
+Q: Who owns World of Coca-Cola? S: Queen Victoria became Empress of India in 1876. Mastery-Score:0.75S: Queen Victoria became Empress of India in 1876. Mastery-Score:0.75S: Queen Victoria became Empress of India in 1876. Mastery-Score:0.75
+Mastered
+Figure 4: Overall architecture of ZERO-RAG. The pipeline comprises four key stages: (1)Corpus Pruning via
+Mastery-Score, which filters out already-mastered documents; (2)Query Router, which dynamically decides whether
+to retrieve or not; (3)Noise-Tolerant Tuning, ensuring robustness against partially relevant or irrelevant documents;
+and (4) the finalInferencestage that integrates all previous steps.
+L=−E
+
+logp θ(a|q)
+
+| {z }
+Retrieval-Free
+−E
+
+logp θ(a|q, rp)
+
+| {z }
+Retrieval-Augment
+−E
+
+logp θ(a|q, rn)
+
+| {z }
+Noise-Suppression
+(6)
+3.4 Zero-RAG Inference
+Our inference pipeline combines the trained Corpus
+Pruner, Query Router, and Retriever to efficiently
+generate answers while avoiding redundant infor-
+mation. The process is as follows:
+1. Corpus Pruning:We initiate the inference
+process by pruning the original corpus D to
+remove redundant information. Utilizing the
+Corpus Pruner, we assign a Mastery-Score
+to each sentence and filter out samples with
+high scores, resulting in a non-redundant sub-
+set Dnon-red. Further details are provided in
+Appendix A.1.
+2. Query Routing:Then, for each query q, the
+Query Router checks if the model already has
+sufficient internal knowledge to answer it.
+3. Final Inference:For amasteredquery, the
+model answers directly using its internal
+knowledge. For anunmasteredquery, the
+Retriever searches Dnon-red for a few relevant
+documents, which are provided to the model
+to generate the final answer.
+4 Experiment
+4.1 Experimental Settings
+DatasetsWe evaluate on four standard QA bench-
+marks with distinct characteristics:EntityQues-
+tions(Sciavolino et al., 2021): Wikidata-based
+simple entity queries for structured knowledge eval-
+uation.TriviaQA(Joshi et al., 2017): Large-scale
+evidence-based QA with document context require-
+ments.PopQA(Wang et al., 2024): Template-
+generated entity pairs (14k) with popularity anno-
+tations.HotpotQA(Yang et al., 2018): Multi-hop
+reasoning requiring cross-document analysis
+Method ComparisonSince our work is the first
+to explore database pruning, a technique that can be
+combined with other RAG methods, so we compare
+our approach against two baselines:Standard In-
+struct Models:These are typical instruction-tuned
+models (e.g., llama3-70B-Instruct, llama3.3-70B-
+Instruct) that use the full database for both retrieval
+and answer generation, without any pruning.Noise-
+Tolerant Models:These models are fine-tuned us-
+ing our Noise-Tolerant Tuning approach (see Sec-
+tion 3.3), which incorporates database pruning into
+the training process to enhance retrieval efficiency
+and robustness.
+5
+
+===== PAGE 6/15 =====
+20920Method PopQA HotpotQA TriviaQA EntityQuestions
+Llama3-70B
+Llama3-70B-Instruct 14.08 43.71 80.66 51.91
++ Retrieval 15.62 41.40 76.44 48.25
+Noise-Tolerant Tuning 25.21 42.70 81.43 54.14
++ Retrieval 39.36 49.67 81.90 65.25
+Zero-RAG (No Pruning) 31.72 45.00 81.80 60.82
+Zero-RAG (- 10% Corpus) 30.81 43.84 81.50 58.92
+Zero-RAG (- 30% Corpus) 30.67 43.30 81.00 57.82
+Zero-RAG (- 50% Corpus) 30.32 41.93 80.53 56.11
+Zero-RAG (- 70% Corpus) 29.48 40.69 80.40 55.41
+Llama3.3-70B
+Llama3.3-70B-Instruct 16.25 46.20 81.43 52.01
++ Retrieval 16.35 43.35 79.32 50.71
+Noise-Tolerant Tuning 32.77 47.50 82.19 55.38
++ Retrieval 38.94 49.12 81.50 65.16
+Zero-RAG (No Pruning) 35.78 51.28 82.69 63.70
+Zero-RAG (- 10% Corpus) 35.43 49.41 82.57 61.33
+Zero-RAG (- 30% Corpus) 34.80 48.52 82.42 60.43
+Zero-RAG (- 50% Corpus) 34.24 47.09 82.17 57.35
+Zero-RAG (- 70% Corpus) 32.91 46.20 82.07 56.29
+Table 1: Performance Comparison Across Datasets with Different Methods. Llama3-70B-Instruct methods are
+shown for comparison.
+Implementation DetailsFor our retrieval tasks,
+we use Wikipedia as the database due to its promi-
+nence in RAG research. We segment the Wikipedia
+text into sentences using Python’s NLTK sentence
+tokenizer. In total, the complete corpus was divided
+into 138,390,600 sentences. For each selected sen-
+tence, we generate corresponding question-answer
+pairs using GPT-4o-mini. We design a prompt tem-
+plate that instructs the model to create a question
+whose answer is contained in the sentence ,show
+in Appendix A.2. Depending on the sentence com-
+plexity, we generaten QA pairs per sentence. After
+generation, we filter out invalid QA pairs—those
+where the answer does not correctly reflect content
+in the sentence or does not meet our quality crite-
+ria—to ensure that only high-quality training data
+are used. During the corpus pruning phase, a 7B
+model is trained to predict the Mastery-Score (MS)
+of a 70B model. For the SFT training phase, we
+utilize LoRA for fine-tuning with a learning rate
+of 3×10 −4. In the retrieval phase, we employ
+stella_en_400M_v5 as the retrieval model and set
+the number of document candidates per query to 20.
+4.2 Main Results
+As illustrated in Table 1, we evaluate both Llama3-
+70B and Llama3.3-70B on four QA datasets. Com-
+pared to the baseline zero-RAG system that uses the
+full corpus, pruning 30% of the database results in
+only minimal performance degradation—averaging
+less than a two-point drop at moderate pruning lev-
+els and around three points at a 70% pruning ratio.
+This indicates that abundant redundant knowledge
+in the original corpus provides negligible benefit.
+Specifically, for TriviaQA, removing 70% of the
+corpus results in merely a 0.62-point drop, sug-
+gesting that much of TriviaQA-related knowledge
+is redundant and that eliminating it has almost no
+adverse effect on performance.
+Furthermore, for TriviaQA,EntityQuestion, Hot-
+potQA, simply adding corpus for RAG leads to a
+slight drop in scores. However, once Noise-Tuning
+is applied, performance not only recovers but actu-
+ally surpasses the original baseline, indicating that
+our approach effectively enhances RAG’s robust-
+ness and overall utility.
+Additionally, under the same pruning ratios,
+Llama3.3-70B consistently outperforms Llama3-
+70B, implying that Llama3.3-70B possesses a
+larger reservoir of overlapping knowledge with
+Wikipedia.
+4.3 Analyses
+The Effect of Different ComponentsWe evalu-
+ate the effectiveness of each component on Triv-
+iaQA and HotpotQA. In Table 3, we present the
+performance changes that occur when each indi-
+vidual component is removed in isolation. First,
+6
+
+===== PAGE 7/15 =====
+Method PopQA HotpotQA TriviaQA EntityQuestions
+Top5 Top10 Top20 Top5 Top10 Top20 Top5 Top10 Top20 Top5 Top10 Top20
+Llama3.3-70B-Instruct 16.25 16.25 16.25 46.20 46.20 46.20 81.43 81.43 81.43 52.01 52.01 52.01
++ Retrieval 13.87 15.34 16.35 43.42 44.86 43.35 74.85 77.57 79.32 50.24 53.73 50.71
+Noise-Tolerant Tuning 32.77 32.77 32.77 47.50 47.50 47.50 82.19 82.19 82.19 55.38 55.38 55.38
++ Retrieval 38.09 38.66 38.94 48.29 49.05 49.12 80.54 81.41 81.50 63.76 64.47 65.16
+Zero-RAG (No Pruning) 35.17 35.73 35.78 50.98 51.16 51.28 82.46 82.58 82.69 62.76 63.28 63.70
+Zero-RAG (- 30% Corpus) 33.87 33.99 34.01 48.01 48.50 48.52 82.31 82.41 82.42 59.75 60.08 60.43
+Table 2: An ablation study assessing the performance of Zero-RAG on Llama3.3-70B under various top-k settings
+(Top5, Top10, and Top20).
+Method TriviaQA HotpotQA
+Prune Ratio EM Prune Ratio EM
+Llama3.3-70B-Instruct - 81.43 - 46.20
++ Retrieval 0% 79.32 0% 43.35
+Zero-RAG 30% 82.42 30% 48.52
+- Corpus Prune 0% 82.69 0% 51.28
+- Query Router 30% 81.50 30% 43.35
+- Noise-Tolerant Tuning 30% 80.55 30% 42.82
+Table 3: Ablation study assessing the effectiveness of
+Zero-RAG components on the TriviaQA and HotpotQA
+datasets using the Llama3.3-70B-Instruct model. Exact
+Match (EM) scores are reported for various pruning
+ratios.
+Prune Ratio HotpotQA EntityQ TriviaQA Avg
+0%14.65 10.96 11.24 12.28
+30%10.89 9.09 9.00 9.66
+Table 4: Retrieval latency (in seconds) under different
+prune ratios for various datasets. TheAvgcolumn repre-
+sents the mean latency across all three datasets.
+we omit theQuery Router, which is designed to
+detect whether the LLM can confidently answer a
+query using its internal knowledge. This routing
+mechanism helps avoid unnecessary retrieval for
+“known” queries, thereby preventing the introduc-
+tion of noisy or redundant documents. Removing
+the Query Router leads to a noticeable drop in per-
+formance, indicating that unnecessary retrieval can
+degrade both accuracy and efficiency. Next, we
+remove theNoise-Tolerant Tuningmodule, which
+explicitly trains the model to disregard irrelevant
+or misleading documents when partial or fully un-
+related content is retrieved. This approach is mo-
+tivated by the potential for genuine query needs
+that still require pruned documents, or instances
+where retrieval may unintentionally return off-topic
+material. Disabling Noise-Tolerant Tuning yields
+a significant decrease in Exact Match (EM), un-
+derscoring its crucial role in preserving model ro-
+Method PopQA HotpotQA TriviaQA EQ
+Llama3-8B-Instruct 7.98 32.67 68.75 33.30
++ Retrieval 11.84 35.42 71.23 45.84
+Noise-Tolerant Tuning 12.96 32.57 68.74 39.84
++ Retrieval 30.32 38.80 75.63 55.03
+Zero-RAG (No Pruning) 21.29 35.21 72.08 48.71
+Zero-RAG (- 30% Corpus) 18.91 31.89 67.93 43.19
+Table 5: Performance of Llama3-8B with a 30% pruned
+corpus as evaluated on four QA datasets. These ob-
+jective results demonstrate that pruning the corpus en-
+hances both retrieval efficiency and overall performance.
+bustness amidst noisy retrieval results. Finally, the
+Corpus Pruningcomponent effectively eliminates
+redundant and non-essential knowledge from the
+database. By maintaining a leaner yet sufficiently
+informative database, Zero-RAG can streamline
+retrieval without sacrificing accuracy. Even af-
+ter a 30% reduction in database size, the model
+continues to perform strongly—demonstrating the
+efficacy of pruning in reducing overhead while re-
+taining critical information.
+Effect of Different Model SizesTable 5 presents
+results for Llama3-8B on PopQA, HotpotQA, Triv-
+iaQA, and EntityQuestions. Even though this is
+a smaller model, the table shows it still contains
+substantial redundant knowledge. When 30% of
+the corpus is pruned, the Exact Match (EM) recall
+decreases by only about four percentage points, un-
+derscoring the limited utility of the pruned data.
+These findings indicate that redundancy persists
+not only in large-scale models but also in smaller
+ones like Llama3-8B.
+The Impact of the Number of Retrieved Docu-
+mentsTo evaluate the impact of different top-
+k settings on the performance of Zero-RAG,
+we conducted an ablation study across four
+datasets: PopQA, HotpotQA, TriviaQA, and Enti-
+tyQuestions, utilizing the Llama3.3-70B-Instruct
+model. Specifically, we examined three top-k set-
+7
+
+===== PAGE 8/15 =====
+tings—Top5, Top10, and Top20—to understand
+how varying the number of retrieved sentences
+influences the model’s Exact Match (EM) scores.
+The detailed results are presented in Table 2. The
+ablation study reveals that Zero-RAG maintains ro-
+bust performance across different top- k settings.
+While EM scores exhibit slight variations with
+changes in top-k, the overall trend indicates that
+Zero-RAG effectively leverages retrieved informa-
+tion without being overly sensitive to the exact
+value of k. This insensitivity to the filtering thresh-
+old hyper-parameter underscores Zero-RAG’s ro-
+bustness and flexibility, demonstrating its capabil-
+ity to maintain performance across a range of re-
+trieval configurations.
+Optimizing Indexing and Retrieval Efficiency
+via Database PruningTable 4 summarizes the
+retrieval latency (in seconds) for HotpotQA, En-
+tityQuestions, and TriviaQA under two pruning
+ratios: 0% (no pruning) and 30%. With no pruning,
+the latency ranges from 10.96 s to 14.65 s (aver-
+aging 12.28 s). By pruning 30% of the corpus,
+latency decreases across all datasets (from 9.00 s
+to 10.89 s), bringing the average latency down to
+9.66 s. These results indicate that reducing the
+database size by 30% yields a marked speedup
+(over 20% improvement on average), thus enhanc-
+ing both indexing and retrieval efficiency.
+Case StudyTo further demonstrate the effec-
+tiveness of our corpus pruning strategy, we sam-
+pled a sentence from the pruned portion of the
+Wikipedia database and constructed corresponding
+question–answer pairs. Specifically, we chose the
+sentence“Queen Victoria became Empress of India
+in 1876. ”—which had been removed due to its high
+Mastery-Score—and derived four questions based
+on it. As shown in Table 6, Llama3-70B-Instruct
+correctly answered all of these questions, achieving
+an accuracy of 100%. This result indicates that our
+pruning process indeed discarded knowledge the
+model had already “mastered”.
+5 Related Work
+Effective RAGA variety of methods have been
+proposed to improve the effectiveness of Retrieval-
+Augmented Generation (RAG). A more capable
+retriever supplies highly relevant context, reduc-
+ing the language model’s workload and boosting
+overall performance. Zhu et al. (2024) describe a
+training-free approach that extends the retriever’s
+context window, allowing it to handle longer doc-
+uments more effectively, while Mao et al. (2024)
+adapt large language models (LLMs) for conver-
+sational retrieval, improving the relevance of in-
+formation in dialogue settings. On the model side,
+recent work has focused on fine-tuning strategies
+for handling retrieved evidence more robustly. For
+example, Zhang et al. (2024a) incorporate negative
+samples during training, enabling the model to deal
+better with irrelevant or noisy documents. Addi-
+tionally, Chain-of-Note (Yu et al., 2023) teaches
+the model to rely on its internal knowledge when ir-
+relevant documents are retrieved, whereas SEAKR
+(Yao et al., 2024) uses self-aware uncertainty to
+re-rank candidate documents and select those that
+reduce the model’s uncertainty the most.
+Efficient RAGFei et al. (2023) focuse on com-
+pressing the original prompt into a shorter, seman-
+tically equivalent representation. AutoCompres-
+sorsChevalier et al. (2023), ICAE(Ge et al., 2024),
+and RECOMP (Xu et al., 2023), explore methods
+to compress and represent long texts into sum-
+mary vectors, ensuring compatibility with language
+models’ input constraints. Zhang et al. (2024b)
+improves the efficiency of iterative retrieval by
+caching recently retrieved documents. ColPali
+(Faysse et al., 2024) adapted Vision-Language
+Models (VLMs) for the retrieval task, simplifying
+the document retrieval pipeline to achieve efficient
+document retrieval. Jiang et al. (2023) and Liu et al.
+(2024) propose methods to determine whether re-
+trieval is necessary based on the given question.
+Additionally, Jeong et al. (2024) introduces strate-
+gies that adapt retrieval approaches according to the
+complexity of the question. (Zhuang et al., 2024)
+through iteratively generates new queries while cir-
+cumventing the need for large language models
+6 Conclusion
+In this paper, we propose Zero-RAG to reduce
+the knowledge dedundancy between the RAG cor-
+pus and LLM. Specifically, we propose mastery-
+score to identify redundant knowledge in RAG cor-
+pus and prune it. Additionally, we prpose query
+router and noise-tolerant training to further improve
+RAG’s utilization of LLM internal knowledge un-
+der the pruned corpus. Experimental results on four
+Fact-intensive QA datasets show that Zero-RAG
+can significantly prune 30% of the external cor-
+pus, accelerate the retrieval by 22% and retain the
+RAG’s performance.
+8
+
+===== PAGE 14/15 =====
+A Details of Mastery-Score
+A.1 Corpus Pruning
+A sentence-based Mastery-Score is defined as:
+RLM(s) =freg(s),
+where RLM(s) denotes the sentence-level Mastery-
+Score predicted by the regression modelf reg.
+To quantify each sentence’s contribution to the
+knowledge database, we compute M(s) for a sen-
+tence s. A high Mastery-Score indicates that the
+sentence’s knowledge is already well-represented
+(and thus redundant) within the language model,
+whereas a low Mastery-Score suggests unique or
+under-represented content. Hence, the Mastery-
+Score serves as a crucial criterion for determining
+whether a sentence should be pruned or retained.
+However, effectively utilizing the Mastery-Score
+requires a clear threshold to distinguish redundant
+from unique sentences. Setting a fixed threshold
+τ is challenging, as redundancy and informative-
+ness can vary widely across datasets and LLMs.
+To address this, we adopt a dynamic, data-driven
+approach for determining τ, ensuring adaptability
+to different scenarios.
+In this approach, we rank all sentences by their
+Mastery-Scores and compute a pruning threshold
+τbased on a specified percentilep. Formally,
+τ= Percentile(RLM(s), p),
+where RLM(s) is the Mastery-Score for each sen-
+tence in the database, and p is the pruning ratio
+dictating what fraction of sentences to retain. We
+then remove sentences whose scores exceedτ. The
+pruned database is:
+Dmastered ={s∈ D |RLM(s)< τ},
+where D is the original database and Dmastered is
+the resulting subset after pruning.
+By employing this dynamic threshold, we bal-
+ance the retention of essential knowledge and the
+removal of redundant information. This not only
+improves retrieval efficiency but also ensures that
+the remaining database is more relevant for the
+target task.
+During inference, the pruned database Dpruned is
+queried to locate sentences that aid the language
+model (LLM) in answering a test question qtest.
+However, retrieving sentences for questions the
+LLM already knows can introduce irrelevant docu-
+ments and potentially degrade performance.
+A.2 Prompt
+To generate questions from a sentence, we use the
+following prompt:
+Instruction: Construct specific and complete
+questions based on the entities mentioned in the
+sentence. Ensure each question is self-
+contained and avoids pronoun references.
+Reference: {reference}
+Question 1:
+Question 2:
+Question 3:
+...
+To answer a given question, we use this prompt:
+Instruction: Answer the following question using
+as few words as possible (no more than 5 words).
+Ensure your response is brief and to the point.
+Question: {question}
+Answer:
+For a given sentence, question, and answer triple,
+we use the following prompt to evaluate the quality
+of the generated QA pair:
+Instruction: Determine if the following question
+can be answered by the given reference. Respond
+with "yes" or "no".
+Question: {question}
+Reference: {reference}
+Answer: {answer}
+Response:
+B Time Consumption
+We evaluated the inference time under different
+pruning ratios on three datasets: HotpotQA, Enti-
+tyQuestion, and TriviaQA. As shown in Table 7,
+Zero-RAG with a 30% pruning ratio significantly
+reduces the overall time cost. For example, on
+the TriviaQA dataset, the total processing time de-
+creases from about 1600 s to around 400 s. This im-
+provement can be mainly attributed to two factors:
+(1) reduced indexing time due to a smaller index
+size, and (2) reduced retrieval overhead for ques-
+tions that are pruned, thereby saving subsequent
+computation time. Moreover, as future models and
+knowledge bases continue to expand, the amount
+of redundant information that can be pruned is ex-
+pected to increase, leading to even greater reduc-
+tions in overall time consumption.
+C The effect of Differen Model
+Table 7 reports the performance of the Qwen-2-
+72B model on PopQA, HotpotQA, TriviaQA. Com-
+14
+
+===== PAGE 15/15 =====
+Dataset Prune Ratio Total Time (s)
+HotpotQA 0 717.13
+30 531.94
+EntityQuestion 0 1924.47
+30 1476.23
+TriviaQA 0 1655.54
+30 441.80
+Table 7: Performance Metrics under Different Prune
+Ratios for Various Datasets.
+Method PopQA HotpotQA TriviaQA
+Qwen-2-72B
+Llama3-70B-Instruct 11.06 46.32 78.80
++ Retrieval 14.36 48.18 79.43
+Noise-Tolerant Tuning 32.77 47.50 82.19
++ Retrieval 32.56 46.58 78.91
+Zero-RAG 32.76 49.18 81.76
+Zero-RAG (- 30% Corpus 29.13 45.17 80.90
+Table 8: Qwen-2-72B results
+pared to the baseline zero-RAG system that uses the
+full corpus, pruning 30% of the database results in
+only minimal performance degradation—averaging
+less than a three-point drop at moderate pruning
+levels.
+15

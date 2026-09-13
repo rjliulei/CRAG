@@ -1,0 +1,52 @@
+---
+description: 提交与 push 时大文件走 Git LFS；勿提交密钥
+alwaysApply: true
+---
+
+# Git 提交与 LFS
+
+用户要求「提交 / commit / push」时按本规则执行。
+
+## 提交流程
+
+1. 先看 `git status` / `git diff` / 最近 commit 文风；**commit message 用中文**（见 `chinese-commit-messages`）。
+2. **不要**暂存或提交密钥与本地环境：`.env`、`credentials.json`、含 token/key 的文件。若用户点名要提交这类文件，先警告再跳过。
+3. 大文件必须走 **Git LFS**，再 `git add` → `commit` → `push`（push 会上传 LFS 对象）。
+
+## 何谓大文件（本仓库）
+
+以下类型默认用 LFS（以根目录与子目录 `.gitattributes` 为准）：
+
+- `docs/论文/**/*.pdf`（含子目录，如 `CAMUS精读/`）
+- `data/*.bz2`、`data/*.bz2.part*`
+- `example_data/*.jsonl.bz2`
+- `mock_api/cragkg/` 下 pickle/dict/sqlite/json/bz2/pkl 等
+
+新增大文件（大致 **>5MB**，或 PDF / 压缩包 / 模型权重 / 数据库二进制）时：
+
+```bash
+git lfs track "路径或通配符"
+git add .gitattributes
+git add <大文件>
+```
+
+确认已被 LFS 跟踪后再提交：
+
+```bash
+git lfs status
+git lfs ls-files
+```
+
+## Push
+
+```bash
+git push
+```
+
+若远端报 LFS 相关错误，先检查本机 `git lfs version`，再重试 push；不要把大 PDF 当普通 blob 强推。
+
+## 禁止示例
+
+- ❌ 未 `git lfs track` 就直接 `git add` 大 PDF / `.bz2`
+- ❌ 把 `.env` 改动一并 commit
+- ❌ 为绕过体积限制而 `--no-verify`（除非用户明确要求）

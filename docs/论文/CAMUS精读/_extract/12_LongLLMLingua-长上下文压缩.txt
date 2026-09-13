@@ -1,0 +1,916 @@
+
+===== PAGE 1/20 =====
+LongLLMLingua: Accelerating and Enhancing LLMs in Long Context
+Scenarios via Prompt Compression
+Huiqiang Jiang, Qianhui Wu, Xufang Luo,
+Dongsheng Li, Chin-Yew Lin, Yuqing Yang, Lili Qiu
+Microsoft Corporation
+{hjiang,qianhuiwu,xufluo,dongsli,cyl,yuqyang,liliqiu}@microsoft.com
+Abstract
+In long context scenarios, large language mod-
+els (LLMs) face three main challenges: higher
+computational cost, performance reduction,
+and position bias. Research indicates that LLM
+performance hinges on the density and posi-
+tion of key information in the input prompt. In-
+spired by these findings, we propose LongLLM-
+Lingua for prompt compression towards im-
+proving LLMs’ perception of the key informa-
+tion to simultaneously address the three chal-
+lenges. Our extensive evaluation across vari-
+ous long context scenarios demonstrates that
+LongLLMLingua not only enhances perfor-
+mance but also significantly reduces costs and
+latency. For instance, in the NaturalQuestions
+benchmark, LongLLMLingua boosts perfor-
+mance by up to 21.4% with around 4x fewer
+tokens in GPT-3.5-Turbo, leading to substantial
+cost savings. It achieves a 94.0% cost reduction
+in the LooGLE benchmark. Moreover, when
+compressing prompts of about 10k tokens at ra-
+tios of 2x-6x, LongLLMLingua can accelerate
+end-to-end latency by 1.4x-2.6x.1
+1 Introduction
+Large language models (LLMs) have revolution-
+ized user-oriented language technologies and are
+serving as crucial components in more and more
+applications. Carefully designing prompts is nec-
+essary to achieve better performance in specific
+downstream tasks. The commonly used technolo-
+gies such as In-Context Learning (ICL) (Min et al.,
+2022; Dong et al., 2023), Retrieval Augment Gener-
+ation (RAG) (Lewis et al., 2020; Asai et al., 2024),
+and Multi-turn Agent (Shen et al., 2024; Park et al.,
+2023; Wu et al., 2023a) are driving prompts to be
+increasingly longer, even reaching thousands of to-
+kens. Scenarios such as multi-document question
+answering, code completion, and document sum-
+marization also necessitate the processing of long
+contexts.
+1Access our code at https://aka.ms/LongLLMLingua.
+There are three main challenges when LLMs are
+used in long context scenarios: (1) Higher com-
+putational costs, encompassing both financial and
+latency expenses. (2) Longer prompts introduce
+irrelevant and redundant information, which can
+weaken LLMs’ performance (Shi et al., 2023), as
+illustrated in Figure 1a. (3) LLMs exhibit position
+bias (Kamradt, 2023), also known as the "lost in the
+middle" issue (Liu et al., 2024), suggesting that the
+placement of key information within the prompt
+significantly affects LLMs’ performance. This is
+demonstrated by the purple curve in Figure 1b.
+Inspired by these observations, we propose
+LongLLMLingua to address the three challenges.
+Specifically, we use LLMLingua (Jiang et al.,
+2023a) as the backbone for prompt compression
+to address the first challenge, i.e., reduce cost and
+latency. However, in the case of long contexts, the
+distribution of question-relevant key information
+in the prompt is generally dynamic and sparse. Ex-
+isting prompt compression methods like LLMLin-
+gua (Jiang et al., 2023a) and Selective-Context (Li
+et al., 2023c) that often fail to consider question
+during compression, resulting in retention of exces-
+sive noise and decreased performance. LongLLM-
+Lingua aims to improve LLMs’ perception of key
+information pertinent to the question, thereby over-
+coming the noise and position bias issues in long
+contexts, shown in Figure 1b. The underlying prin-
+ciple of LongLLMLingua is that small LM are
+inherently capable of capturing the distribution of
+key information relevant to a given question.
+Our main contributions are five-fold: (1) We
+propose a question-aware coarse-to-fine compres-
+sion method to improve the key information den-
+sity in the prompt (Sec. 4.1); (2) We introduce
+a document reordering strategy to minimize po-
+sition bias in LLMs. (Sec. 4.2); (3) We estab-
+lish dynamic compression ratios for precise con-
+trol between coarse and fine compression levels
+(Sec. 4.3); (4) We propose a post-compression
+arXiv:2310.06839v2  [cs.CL]  12 Aug 2024
+
+===== PAGE 2/20 =====
+1 5 10 15 20
+Document Number in the Prompt
+85
+90
+95
+100Normalized Performance(%)
+Multi-Document QA
+Code Completion
+Summarization
+(a) Performance v.s. Document Number
+1st 5th 10th 15th 20th
+Position of Document with the Answer
+55
+60
+65
+70
+75Accuracy(%)
+ Original
+LongLLMLingua 
+w/o Reorder (4x)
+LongLLMLingua (4x) (b) Performance v.s. Key Information Position
+Figure 1: (a) LLMs’ performance in downstream tasks decreases with increased noise in prompts. In this case,
+we keep k most relevant documents/paragraphs based on the ground-truth or LongLLMLingua rk. A larger k
+implies more noise introduced into the prompt. To improve the key information density in the prompt, we present
+question-aware coarse-to-fine compression. (b) LLMs’ ability to capture the relevant information depends on their
+positions in the prompt. To reduce information loss in the middle, we introduce a document reordering mechanism.
+subsequence recovery strategy to improve the in-
+tegrity of the key information (4.4). (5) We evaluate
+LongLLMLingua across five benchmarks, i.e., Nat-
+uralQuestions (Liu et al., 2024), LongBench (Bai
+et al., 2023), ZeroSCROLLS (Shaham et al., 2023),
+MuSicQue (Trivedi et al., 2022), and LooGLE (Li
+et al., 2023b), covering a variety of long con-
+text scenarios. Experimental results reveal that
+LongLLMLingua’s compressed prompts outper-
+form original prompts in terms of performance,
+cost efficiency, and system latency.
+2 Problem Formulation
+Following LLMLingua (Jiang et al., 2023a), we
+use x = (xins, xdoc
+1 , ··· , xdoc
+K , xque) to represent
+a prompt, including the instruction xins, K docu-
+ments xdoc
+i , and the question xque. However, this
+definition can be adjusted for specific scenarios.
+The objective of a prompt compression system can
+be formulated as:
+min
+ex
+Dϕ (y, ey) +λ∥ex∥0, (1)
+where ex represents the compressed prompt, a token-
+level subsequence of x. y and ey represent the
+LLM-generated results from x and ex, respectively.
+Dϕ measures the distance function, such as KL di-
+vergence. λ serves as a hyper-parameter balancing
+the compression ratio. Additionally, this study ex-
+plores a permutation operation space over the K
+documents (xdoc
+1 , ··· , xdoc
+K ) for joint optimization.
+3 Preliminary: LLMLingua
+LLMLingua (Jiang et al., 2023a) utilizes a small
+language model MS to evaluate the perplexity of
+each prompt token, removing those with lower per-
+plexities. This method is premised on the idea
+that tokens with lower perplexities have a negli-
+gible effect on the language model’s overall en-
+tropy gain, implying their removal slightly impacts
+the LLMs’ contextual understanding. This process
+is viewed as an application of "LM is Compres-
+sion" (Delétang et al., 2023). LLMLingua include
+three key components: budget controller, iterative
+token-level prompt compression, and distribution
+alignment, highlighted by italic text in Figure 2.
+The budget controller assigns varying compres-
+sion ratios to different parts of the prompt (i.e.,
+instruction, demonstrations, question), implement-
+ing coarse-level prompt compression. Subsequent
+steps involve dividing intermediate results into seg-
+ments and applying token-level compression iter-
+atively, where each token’s perplexity based on
+preceding compressed segments. To aware differ-
+ent target LLMs, LLMLingua fine-tunesMS using
+data from the target LLM.
+4 LongLLMLingua
+LongLLMLingua builds on LLMLingua to better
+compress prompts in long context scenorias. It tack-
+les three main issues in handling lengthy contexts,
+as introduced in Sec. 1. This approach focuses on
+making LLMs more effective at recognizing key
+
+===== PAGE 3/20 =====
+Original Prompt LongLLMLingua
+Compressed Prompt
+Instruction: Answer the question based 
+on the given passages. Only give me the 
+answer and do not output any other 
+words. The following are given 
+passages.
+Document 1: Alberic III of Dammartin
+Alberic III of Dammartin (Aubry de 
+Dammartin) (c. 1138 – 19 September 
+1200) was a French count and son of 
+Alberic II, Count of Dammartin, and 
+Clé mence de Bar, daughter of Reginald 
+I, Count of Bar…
+Document 2:
+…
+Document N: Pope Agapetus II
+Pope Agapetus II (died 8 November 955) 
+was the bishop of Rome and ruler of the 
+Papal States from 10 May 946 to his 
+death. A nominee of the princeps of 
+Rome, Alberic II of Spoleto, his 
+pontificate occurred during …
+Question: Who gave the mother of 
+Alberic II of Spoleto the title "patricia" 
+of Rome?
+Small 
+Model
+Black-box LLMs
+~13k tokens
+Answer the question based on the given 
+passages. …Passage 4:was a Roman 
+noblewo who was the alleged mistress 
+of Pope Sergius III and was given the 
+unprecedented titles senatrix 
+("senatoress") and patricia of Rome by 
+Pope John X. , when Ottosys, the of and, 
+were to to discusss Rome and other 
+more important, were.us was to the 
+dispute the the of Re… Who gave the 
+mother of Alberic II of Spoleto the title 
+"patricia" of Rome? ~2k tokens
+I  Budget Controller
+Question-aware Coarse-Grained 
+                Compression
+w/ document reordering
+II  Iterative Token-level           
+Question-aware Fine-Grained 
+Compression
+w/ dynamic compression ratio
+0  Distribution 
+    Alignment
+III Execution with 
+Compressed Prompt
+Subsequence 
+Recovery
+Response
+IV
+Figure 2: Framework of LongLLMLingua. Gray Italic content: As in LLMLingua.
+information related to the question in the prompt.
+It encompasses three perspectives and further incor-
+porates a subsequence recovery strategy, as shown
+in Figure 2, to enhance the accuracy and reliability
+of the information provided to users. In this section,
+we detail how each part of LongLLMLingua works
+to improve the LLMs deal with long context.
+4.1 How to improve key information density
+in the prompt?
+Question-Aware Coarse-Grained Compression
+In coarse-grained compression, we aim to figure
+out a metric rk to evaluate the importance of each
+document xdoc
+k = {xdoc
+k,i }Nk
+i=1, where Nk is the
+number of tokens in xdoc
+k . We only keep xdoc
+k
+with higher rk as the intermediate compressed re-
+sults. One approach to improve key information
+density in the compressed prompts is to calculate
+document-level perplexity conditioned on the ques-
+tion p(xdoc
+k |xque). However, this method may not
+be effective because documents often contain a sig-
+nificant amount of irrelevant information. Even
+when conditioned on xque, the perplexity scores
+computed for entire documents may not be suffi-
+ciently distinct, rendering them an inadequate met-
+ric for document-level compression.
+We propose to use the perplexity of the ques-
+tion xque conditioned on different contexts xdoc
+k
+p(xque|xdoc
+k ) to represent the association between
+them. We also append a restrictive statement 2
+xrestrict after xque to strengthen the interconnection
+2Specifically, "We can get the answer to this question in
+the given documents".
+of xque and xdoc
+k . It can be regarded as a regulariza-
+tion term that mitigates the impact of hallucinations.
+This can be formulated as:
+rk = − 1
+Nc
+NcX
+i
+log p(xque,restrict
+i |xdoc
+k ),
+k ∈ {1, 2, ··· , K},
+(2)
+where xque,restrict
+i is the i-th token in the concate-
+nated sequence of xque and xrestrict and Nc in the
+number of tokens.
+Figure 3a displays the recall distribution of dif-
+ferent retrieval methods, including traditional rele-
+vance methos (BM25, Gzip (Jiang et al., 2023b)),
+embedding-based methods (OpenAI-embedding,
+V oyageai3, BGE-large-en v1.5 (Xiao et al., 2023),
+Sentence-BERT (Reimers and Gurevych, 2019),
+Jina (Günther et al., 2023)), and reranker methods
+(Cohere-Rerank4, BGE-llmembeder, BGE-Ranker-
+large), which demonstrates that our coarse-level
+compression approach achieves the highest recall
+with different numbers of retained documents, sug-
+gesting that it preserves the most key information
+from the contexts in the compressed results.
+Question-Aware Fine-Grained Compression
+In fine-grained compression, we assess the impor-
+tance of each token in the instruction xins, the ques-
+tion xque, and K′ documents {xdoc
+i }K′
+i=1 retained af-
+ter coarse-grained compression. We incorporate the
+3https://www.voyageai.com/
+4https://cohere.com/rerank
+
+===== PAGE 4/20 =====
+1 5 10 15 20
+Number of Retained Documents
+0
+20
+40
+60
+80
+100Recall(%)
+LLMLingua
+BM25
+OpenAI
+Voyageai
+BGE-large-en v1.5
+SBERT
+Gzip
+Cohere-Rerank
+BGE-llmembeder
+Jina
+LongLLMLingua rk 
+w/o restrict
+BGE-Ranker-large
+LongLLMLingua rk
+(a) Recall Distribution
+1 5 10 15 20
+Document Position in the Prompt
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0Document Avg. Perplexity
+Perplexity
+Contrastive Perplexity (b) Perplexity Distribution (5th)
+Figure 3: (a) Comparison of recall on NaturalQuestions Multi-documemnt QA dataset, which increases from top to
+bottom in terms of Recall@1. Different colors represent different types of methods. Among them, yellow represents
+traditional relevance methods, green signifies embedding-based methods, and red denotes rerank-based methods.
+(b) Comparison between perplexities and contrastive perplexities of tokens in the prompt from Multi-documemnt
+QA dataset. The document containing the ground-truth information is located in the 5th position. More results on
+position can be found in the Appendix C.1.
+iterative compression mechanism following LLM-
+Lingua and directly calculate token perplexities
+to compress xins and xque. In this section, we in-
+vestigate how to make the fine-grained token-level
+compression over {xdoc
+k }K′
+k=1 aware of the question
+xque, so that the compressed results could contain
+more question-relevant key information.
+A straightforward solution for the awareness of
+xque is to simply concatenate it at the beginning
+of the whole context. However, this will result in
+low perplexities of relevant tokens in the context
+following the condition of question xque, further
+reducing their differentiation from other tokens.
+In this paper, we propose contrastive perplexity,
+i.e., the distribution shift caused by the condition of
+the question, to represent the association between
+the token and the question. The contrastive perplex-
+ity based importance metric si for each token xi in
+{xdoc
+k }K′
+k=1 can be formulated as:
+si = perplexity(xi|x<i)−perplexity(xi|xque, x<i).
+(3)
+Additionally, we provide the derivation of its
+mathematical significance in the Appendix A, con-
+cluding that it is equivalent to conditional pointwise
+mutual information (Church and Hanks, 1989).
+Figure 3b illustrates the difference between per-
+plexities and contrastive perplexities. The distri-
+bution of perplexities appears random, making it
+challenging to extract information related to the
+question. However, tokens with high contrastive
+perplexities tend to cluster near the ground-truth
+document, which contains information relevant to
+the question. This suggests that the proposed con-
+trastive perplexity can better distinguish tokens
+relevant to the question, thus improving the key
+information density in the compressed results.
+4.2 How to reduce information loss in the
+middle?
+As demonstrated in Figure 1b, LLM achieves the
+highest performance when relevant information oc-
+curs at the beginning and significantly degrades if
+relevant information is located in the middle of long
+contexts. After the coarse-grained compression, we
+have obtained a set of documents {xdoc
+k }K′
+k=1 with
+their corresponding importance scores {rk}K′
+k=1 in-
+dicating their association with the question xque.
+Therefore, we reorder documents using their impor-
+tance scores to better leverage LLMs’ information
+perception difference in positions:
+(xins, xdoc
+1 , ··· , xdoc
+K′ ,xque)
+rk
+−→
+(xins,xdoc
+r1 , ··· , xdoc
+rK′ , xque)
+(4)
+4.3 How to achieve adaptive granular control
+during compression?
+In fine-grained compression, LLMLingua applies
+the same compression ratio over all documents ob-
+tained from budget controller. However, the key
+information density of different documents is differ-
+ent. The more relevant to the question a document
+
+===== PAGE 5/20 =====
+Original Prompt
+Document [1](Title: List of Nobel laureates in Physics) The first 
+Nobel Prize in Physics was awarded in 1901 to {Wilhelm Conrad 
+Röntgen}{Wilhelm Con rad Rö nt gen}, of Germany,…
+Document [1](Title: List of Nobelates in 
+Physics) The first Nobel1 
+{Wilhelmgen}{Wilhelm gen}, of, who 
+received, ….
+{Wilhelmgen}
+{Wilhelm gen}
+Compressed Prompt LLMs’ Response
+Figure 4: The example of Subsequence Recovery, the red text represents the original text, and the blue text is the
+result after using the LLaMA 2-7B tokenizer.
+is, the more budget ( i.e., lower compression ra-
+tio) we should allocate to it. Therefore, we bridge
+coarse-grained compression to fine-grained com-
+pression and use the importance scores {rk}K′
+k=1
+obtained from coarse-grained compression to guide
+the budget allocation in fine-grained compression.
+In this way, we can achieve adaptive granular con-
+trol on the whole.
+Specifically, we first determine the initial budget
+for the retained documents 5 τdoc using the bud-
+get controller of LLMLingua. During fine-grained
+compression, we follow the iterative token-level
+compression algorithm in LLMLingua but dynam-
+ically assign the compression budget τdoc
+k to each
+document xdoc
+k according to the ranking indexI(rk)
+(e.g., 0, 1) of its importance score from the coarse-
+grained compression. In this paper, we employ a
+linear scheduler for the adaptive allocation. Budget
+of each token xi can be formulated as:
+τi = τdoc
+k , ∀xi ∈ xdoc
+k ,
+τdoc
+k = max(min((1− 2I(rk)
+K′ )δτ + τdoc, 1), 0),
+(5)
+where i and k is the index of token and document,
+K′ denotes the number of documents, and δτ is
+a hyper-parameter that controls the overall budget
+for dynamic allocation.
+4.4 How to improve the integrity of key
+information?
+During the generation process, LLMs tend to repli-
+cate entities found in the prompt, such as names,
+places, and organizations. Compressing these en-
+tities at the token level doesn’t affect the LLMs’
+understanding of semantic content but can lead to
+errors in the generated content.
+Therefore, we propose a subsequence recovery
+method to restore the original content in LLMs’
+responses. This method relies on the subse-
+quence relationship among tokens in the original
+prompt, compressed prompt, and LLMs’ response,
+as shown in Figure 4.
+5In LLMLingua, it is τdems for demonstrations.
+The overall procedure includes: i) Iterate
+through tokens yl in LLMs’ response and select
+the longest substring eykey,l = {yl, yl+1, ..., yr}
+that appears in the compressed prompt ex. ii)
+Find the maximum common shortest subsequence
+xi,j = {xi, xi+1, ..., xj} in the original prompt x,
+corresponding to the representation eykey,l in the
+original prompt (accelerated using prefix trees or
+sequence automata). iii) Replace the matched to-
+kens eykey,l in LLMs’ response with the correspond-
+ing subsequence xi,j from the original prompt. For
+more details, please refer to Algorithm 1.
+Algorithm 1 Token-level Subsquence Recovery
+Algorithm
+Input: The original prompt x; the compressed prompt ex; the
+generation response of LLMs y.
+1: Set the final response list yrec = ϕ, the left token index of
+subsquence l to 0.
+2: while l <y.len() do
+3: if Substring yl ∈ ex then
+4: Find the longer substring eykey,l = {yl, yl+1,
+..., yr} ∈ex.
+5: Find the maximum common shortest subsequence
+xi,j = {xi, xi+1, ..., xj} in the original prompt x.
+6: Add the subsequence xi,j = {xi, xi+1, ..., xj}
+to the response yrec.
+7: Set the left index l to r + 1.
+8: else
+9: Add the token yl to the response yrec.
+10: Set the left index l to l + 1.
+11: end if
+12: end while
+Output: The final response list yrec.
+5 Experiments
+Here, we investigate: (1) How effective is
+LongLLMLingua? (2) How efficient is LongLLM-
+Lingua?
+Implementation details In this paper, we use
+GPT-3.5-Turbo-06136 and LongChat-13B-16k as
+the target LLMs, both accessible via OpenAI7 and
+HuggingFace8. To ensure stable and reproducible
+6For experiments with original prompts exceeding 4k to-
+kens, we utilize GPT-3.5-Turbo-16k-0613.
+7https://platform.openai.com
+8https://huggingface.co/lmsys/longchat-13b-16k
+
+===== PAGE 6/20 =====
+results, we employ greedy decoding and set the
+temperature to 0 in all experiments. For the small
+language models used for compression, we apply
+LLaMA-2-7B-Chat9, which has been aligned by
+supervised fine-tuning and RLHF. We implement
+our approach with PyTorch 1.13.1 and Hugging-
+Face Transformers. We set up hyperparameters
+following LLMLingua except for the segment size
+used in iterative token-level compression set to 200
+here. More details are provided in Appendix B.
+Dataset & evaluation metric We use Natu-
+ralQuestions for the multi-document QA task, and
+use LongBench and ZeroSCROLLS for general
+long context scenarios. We also test on multi-
+hop QA tasks using MuSiQue dataset (Trivedi
+et al., 2022), and long dependency QA tasks us-
+ing LooGLE benchmark (Li et al., 2023b). Please
+refer to Appendix C for more details on datasets.
+Baselines We include two sets of baselines in
+following experiments:
+(i) Retrieval-based Methods. We assess the
+question-document association in the prompt using
+five SoTA retrieval methods: BM25, Gzip (Jiang
+et al., 2023b), SentenceBERT (Reimers and
+Gurevych, 2019), OpenAI Embedding, and the
+LongLLMLingua ranker’s important metric rk for
+coarse-grained compression. Notably, embedding
+model-based compression mirrors the method in
+Xu et al. (2024). We remove low-relevance sen-
+tences or paragraphs to meet compression limits,
+maintaining the original document sequence.
+(ii) Compression-based Methods. We compare
+our approach with two state-of-art methods for
+prompt compression, i.e., Selective Context (Li
+et al., 2023c) and LLMLingua (Jiang et al., 2023a).
+Both methods employ LLaMA-2-7B-Chat as the
+small language model for compression. In LLM-
+Lingua, a coarse-to-fine approach is used to han-
+dle constraints of compression ratio: the original
+prompt is first compressed to k times the constraint
+at a coarse level, where k is the granular control co-
+efficient; token-level is then performed to reach the
+overall constraint. Our method follows the same
+coarse-to-fine logic to achieve the constraint.
+Main results Table 1 and 2 present the perfor-
+mance of various methods under different com-
+pression constraints. There are multiple observa-
+9https://ai.meta.com/llama/
+9https://python.langchain.com/docs/modules/data_connecti
+on/document_transformers/post_retrieval/long_context_reorder
+tions and conclusions: (1) Our LongLLMLingua
+achieves the best performance across different tasks
+and constraints of compression ratios. Compared
+to the original prompt, our compressed prompt
+can derive higher performance with much lower
+cost. For example, LongLLMLingua gains a per-
+formance boost of 21.4% on NaturalQuestions with
+the ground-truth document at the 10th position,
+while the number of tokens input to GPT3.5-Turbo
+is ∼4x less. (2) Compression-based methods like
+Selective Context (Li et al., 2023c) and LLMLin-
+gua (Jiang et al., 2023a) perform poorly on most
+tasks, especially those with abundant irrelevant
+information in the original prompt. This is due
+to their pure information entropy based compres-
+sion mechanism, which includes too much noise
+in the compressed results and even leads to per-
+formance worse than the zero-shot setting, e.g.,
+on NaturalQuestions. (3) Retrieval-based meth-
+ods work well with low compression ratios. How-
+ever, their performance declines as the compres-
+sion progresses, e.g., 2x → 4x; 3000 tokens →
+2000 tokens. This may be caused by the decreased
+recall. Figure 3a is the illustration of cases on
+NaturalQuestions. (4) LongLLMLingua as well
+as our coarse-grained compression metric rk only
+is much more robust than all other baselines un-
+der different tasks and compression constraints.
+With the increase of the compression ratio, e.g.,
+2x → 4x, LongLLMLingua even achieves a lit-
+tle performance gain. We mainly owe this to the
+question-aware coarse-to-fine compression, which
+can better figure out the key information and reach
+a higher key information density with a higher
+compression ratio. (5) The proposed reordering
+method helps in not only our approach but also
+other baselines, well demonstrating its effective-
+ness. (6) Compared to the results with a 2,000
+tokens constraint, overall performance of 3,000
+tokens has improved. LongLLMLingua sees an
+increase of 1.2 points in average score and a 1.6x
+speedup in end-to-end latency. In this scenario,
+the recall rates of retrieval-based methods have in-
+creased, leading to a significant improvement in
+their accuracy. For example, BM25 achieves an
+average score of 48.9.
+In addition, we also present experimental results
+on datasets such as MuSicQue, LooGLE, ZERO-
+SCROLLS, etc., in Appendix C.
+Ablation study To evaluate the contributions
+of different components in LongLLMLingua, we
+
+===== PAGE 7/20 =====
+Methods GPT3.5-Turbo LongChat-13b Length Latency
+1st 5th 10th 15th 20th Reorder 1st 5th 10th 15th 20th Reorder Tokens 1/τ Latency Speedup
+2x constraint
+Retrieval-based Methods
+BM25 53.7 49.3 47.9 49.9 46.9 50.3 50.9 44.9 44.1 42.9 43.2 46.0 1,545 1.9x 2.1 1.9x
+Gzip 64.6 63.8 60.5 58.3 57.3 64.4 61.9 55.7 52.7 50.8 50.9 59.3 1,567 1.9x 2.1 1.9x
+SBERT 72.5 67.9 63.3 65.0 66.2 68.7 65.8 57.5 54.9 53.4 55.7 61.4 1,549 1.9x 2.2 1.9x
+OpenAI 73.0 65.6 66.5 65.4 65.5 69.9 65.9 57.5 56.2 54.2 55.7 61.7 1,550 1.9x 4.9 0.8x
+LongLLMLinguark 73.9 67.7 68.7 66.0 65.6 74.3 68.5 59.1 56.8 55.3 56.9 65.2 1,548 1.9x 2.3 1.8x
+Compression-based Methods
+Selective-Context 45.4 39.0 33.8 33.5 41.5 - 53.2 26.3 25.4 24.2 33.3 - 1,478 2.0x 7.4 0.6x
+LLMLingua 39.7 39.5 40.4 37.1 42.3 41.5 38.7 37.3 35.7 34.1 37.5 37.1 1,410 2.1x 2.8 1.5x
+LongLLMLingua 77.2 72.9 70.8 70.5 70.6 76.2 68.7 59.4 57.3 55.9 58.4 66.1 1,429 2.1x 2.9 1.4x
+4x constraint
+Retrieval-based Methods
+BM25 40.6 38.6 38.2 37.4 36.6 36.3 39.5 37.5 36.8 36.4 35.5 37.7 798 3.7x 1.5 2.7x
+Gzip 63.1 61.0 59.8 61.1 60.1 62.3 57.6 52.9 51.0 50.1 50.4 57.2 824 3.6x 1.5 2.7x
+SBERT 66.9 61.1 59.0 61.2 60.3 64.4 62.6 56.6 55.1 53.9 55.0 59.1 808 3.6x 1.6 2.5x
+OpenAI 63.8 64.6 65.4 64.1 63.7 63.7 61.2 56.0 55.1 54.4 55.0 58.8 804 3.7x 4.3 1.0x
+LongLLMLinguark 71.1 70.7 69.3 68.7 68.5 71.5 67.8 59.4 57.7 57.7 58.6 64.0 807 3.7x 1.7 2.4x
+Compression-based Methods
+Selective-Context 31.4 19.5 24.7 24.1 43.8 - 38.2 17.2 15.9 16.0 27.3 - 791 3.7x 6.8 0.6x
+LLMLingua 25.5 27.5 23.5 26.5 30.0 27.0 32.1 30.8 29.9 28.9 32.4 30.5 775 3.8x 1.8 2.2x
+LongLLMLingua 75.0 71.8 71.2 71.2 74.7 75.5 68.7 60.5 59.3 58.3 61.3 66.7 748 3.9x 2.1 2.0x
+Original Prompt 75.7 57.3 54.1 55.4 63.1 - 68.6 57.4 55.3 52.5 55.0 - 2,946 - 4.1 -
+Zero-shot 56.1 35.0 15 196x 1.1 3.7x
+Table 1: Performance of different methods with different compression ratios (raw size / compressed size = 1/τ) on
+NaturalQuestions (20 documents) (Liu et al., 2024). Reorder: we reorder the documents with relevance metrics of
+different baselines as our document reordering strategy described in Sec. 4.2. In the case of OpenAI, it corresponds
+to LongContextReorder9 in the LangChain framework (Chase, 2022). For results reported under 1st to 20th, we do
+not use the reordering strategy for all methods.
+introduce following variants of it for ablation
+study. (1) Variants about Question-aware Coarse-
+grained Compression, include: ours w/o Question-
+awareness, which calculates question-text rele-
+vance rk using information entropy in LLMLin-
+gua, ours w/ SBERT, which employs SBERT to
+compute rk, ours w/ p(xdoc
+k |xque,restrict
+i ), which re-
+place p(xque,restrict
+i |xdoc
+k ) with p(xdoc
+k |xque,restrict
+i ) in
+Eq. (2), and ours w/o restrict, which only calcu-
+lates the conditional probability corresponding to
+xque. (2) Ours w/o Question-aware Fine-grained,
+which disregards Eq. (3) and only applies Iterative
+Token-level Prompt Compression as LLMLingua.
+(3) Ours w/o Dynamic Compression Ratio, where
+all documents share the same compression ratio
+in fine-grained compression. (4) Ours w/o and
+(5) LLMLingua w/ Subsequence Recovery, which
+either removes or adds the post-processing subse-
+quence recovery strategy. (6) Ours w/ GPT2-small,
+which uses the GPT2-small model as the MS.
+Table 3, 4, and 7 shows the results of the ablation
+study in difference tasks. In summary, removing
+any component proposed for LongLLMLingua will
+lead to a performance drop regardless of the posi-
+tion of the ground-truth answer. This well validates
+the necessity and effectiveness of the proposed
+question-aware mechanism during coarse-to-fine
+compression, the dynamic compression ratio, and
+the subsequence recovery strategy. It also shows
+that applying SBERT for coarse-grained compres-
+sion will result in inferior performance, which im-
+plies the superiority of our question-aware impor-
+tance metric in Eq. (2) over SBERT. In addition, re-
+placing p(xque,restrict
+i |xdoc
+k ) with p(xdoc
+k |xque,restrict
+i )
+can greatly affect performance due to the large
+noise in calculating p(xdoc
+k ) since the perplexity
+of document depends on many other information
+besides the question. Removing the restrictive
+statement can increase the hallucination of small
+language models, leading to a decrease in perfor-
+mance. Moreover, our subsequence recovery strat-
+egy can also bring performance gains for LLMLin-
+gua. However, without our question-aware mech-
+anism, results from LLMLingua are still less sat-
+isfactory. For more detailed cases, please go to
+Appendix E.
+
+===== PAGE 8/20 =====
+Methods SingleDoc MultiDoc Summ. FewShot Synth. Code A VG Tokens 1/τ Latency Speedup
+3,000 tokens constraint
+Retrieval-based Methods
+BM25 32.3 34.3 25.3 57.9 45.1 48.9 40.6 3,417 3x 7.5 2.1x
+SBERT 35.3 37.4 26.7 63.4 51.0 34.5 41.4 3,399 3x 7.7 2.0x
+OpenAI 34.5 38.6 26.8 63.4 49.6 37.6 41.7 3,421 3x 13.3 1.2x
+LongLLMLingua rk 37.6 42.9 26.9 68.2 49.9 53.4 46.5 3,424 3x 8.2 1.9x
+Compression-based Methods
+Selective-Context 23.3 39.2 25.0 23.8 27.5 53.1 32.0 3,328 3x 50.6 0.3x
+LLMLingua 31.8 37.5 26.2 67.2 8.3 53.2 37.4 3,421 3x 9.2 1.7x
+LongLLMLingua 40.7 46.2 27.2 70.6 53.0 55.2 48.8 3,283 3x 10.0 1.6x
+2,000 tokens constraint
+Retrieval-based Methods
+BM25 30.1 29.4 21.2 19.5 12.4 29.1 23.6 1,985 5x 4.6 3.4x
+SBERT 33.8 35.9 25.9 23.5 18.0 17.8 25.8 1,947 5x 4.8 3.4x
+OpenAI 34.3 36.3 24.7 32.4 26.3 24.8 29.8 1,991 5x 10.4 1.5x
+LongLLMLingua rk 37.8 41.7 26.9 66.3 53.0 52.4 46.3 1,960 5x 4.7 3.3x
+Compression-based Methods
+Selective-Context 16.2 34.8 24.4 15.7 8.4 49.2 24.8 1,925 5x 47.1 0.3x
+LLMLingua 22.4 32.1 24.5 61.2 10.4 56.8 34.6 1,950 5x 5.9 2.6x
+LongLLMLingua 39.9 43.2 27.4 69.8 53.0 56.7 48.3 1,822 6x 6.1 2.6x
+Original Prompt 39.7 38.7 26.5 67.0 37.8 54.2 44.0 10,295 - 15.6 -
+Zero-shot 15.6 31.3 15.6 40.7 1.6 36.2 23.5 214 48x 1.6 9.8x
+Table 2: Performance of different methods under different compression ratios on LongBench (Bai et al., 2023) using
+GPT-3.5-Turbo in 2,000 tokens constraint.
+1st 5th 10th 15th 20th
+LongLLMLingua 77.2 72.9 70.8 70.5 70.6
+Question-aware Coarse-grained
+- w/o Question-awareness 42.1 40.3 39.7 40.1 40.3
+- w/ SBERT 73.2 68.5 65.7 66.1 66.7
+- w/p(xdock |xque,restrict
+i ) 56.0 52.6 53.4 51.6 51.1
+- w/o restrict 75.1 72.2 70.3 70.3 70.2
+- w/o Question-aware Fine-grained 75.8 71.0 68.9 68.4 69.3
+- w/o Dynamic Compression Ratio 74.4 70.7 68.7 67.9 68.1
+- w/o Subsequence Recovery 76.7 71.7 69.4 69.3 69.7
+- w/ Document Reordering 76.2 76.2 76.2 76.2 76.2
+- w/ GPT2-small 74.6 71.7 70.1 69.8 68.5
+LLMLingua 39.7 39.5 40.4 37.1 42.3
+- w/ Subsequence Recovery 43.8 44.1 43.5 43.3 44.4
+Table 3: Ablation study on NaturalQuestions with 2x
+constraint using GPT-3.5-Turbo.
+Latency evaluation We conducte end-to-end la-
+tency testing on a V100-32G, using the prompts
+from Multi-document QA, LongBench, and Zero-
+SCROLLS in the API call, and results are shown
+in Table 1, 2 and 6. The latency includes the time
+cost for prompt compression and the request time
+for LLMs, with multiple measurements taken and
+averaged over. Results demonstrate that LongLLM-
+Lingua does indeed speed up the overall inference
+under different compression ratios and scenarios.
+Moreover, with the compression ratio increasing,
+the acceleration effect becomes more pronounced
+up to 2.6x. However, the OpenAI embedding and
+Selective-Context results in longer latency time,
+due to repeated API calls and the sequential en-
+tropy calculation of semantic units, respectively.
+6 Related Works
+Long context for LLMs . Recent research
+has focused on expanding the window size of
+LLMs. Main approaches include: (1) Staged
+pre-training (Nijkamp et al., 2023) which grad-
+ually increases the context window; (2) Modify-
+ing (Press et al., 2022) or interpolating position em-
+beddings (Chen et al., 2023; Peng et al., 2024); (3)
+Using linear or sparse attention mechanisms (Ding
+et al., 2023; Sun et al., 2023); (4) Utilizing exter-
+nal memory modules for context storage (Bertsch
+et al., 2023; Tworkowski et al., 2023). While these
+methods address context window expansion, their
+impact on downstream task performance has yet to
+be discussed.
+Information distribution in prompt. Recent
+empirical experiments have shown that LLM per-
+formance decreases with less effective information
+
+===== PAGE 19/20 =====
+Compressed Prompt:
+Please complete the code given below.
+public class MessageArchiveManagement
+private static final long MILLISECONDS_IN_DAY = 24 * 00 *0;
+public static final long_CUP = MCON_DAY
+/.../
+.("",.getStart
+add
+ifget() >0
+Node end("
+end.("
+endNode.Value("", Util.getTimestamp(query.getEnd
+addNode
+} if (.withid null && contact null && !isference
+Node with(" .with
+.Value("valuewith
+.(
+// queryMessageive(connection, nextQuery
+final(connectionProtocol(), query
+synchronized (eries)
+// queries.add(nextQuery } }
+public boolean queryInProgress( contact, OnLoaded
+moreMessagesLoadedListener)
+ized (eries)
+(Query query : queries)
+if(query.getWith().equals(contact.getUserId()))
+if (query.onMoreMessagesLoaded == null &&MessagesListener
+null) query.setOnMoreMessagesLoaded(Listener}
+return true;}} return false;}}
+private void finalizeQuery(Protocol protocol, Query query) {
+synchronized (queries) {
+.remove(query); }
+Contact contact = null;
+if (query.getWith() != null) {
+contact = protocol.getItemByUID(query.getWith()); }
+if (contact != null) {
+Next line of code:
+LLMs’ Response:
+contact.setLastMessageTransmitted(query.getEnd());\n
+Ground Truth:
+if (contact.setLastMessageTransmitted(query.getEnd())) {
+Zero-shot LLMs’ Response:
+contact.removeQuery(query);\n
+Figure 8: Cases study on lcc code completion task in LongBench benchmark (Bai et al., 2023) in 2,000 constraint
+using GPT-3.5-Turbo.
+
+===== PAGE 20/20 =====
+Compressed Prompt:
+Please determine the Type of the question below. Here are some examples of questions.
+Question: How is energy created ? Type Manner of an action
+Question: What is chocolate ? Type: Definition of something
+Question: What is a bone marrow transplant ? Type: Definition of something
+Question: What is fear of odors , body , ? Type Disease and medicine
+Question: What was the Vietnam War ? Type: Definition of something
+Question: was education system in 16s ? Type: Other entity
+Question: What is IP address ? Type: Definition of something
+Question: are the differences in Catholic Methodist religions ? Type of something
+...
+Question: When was San fire ? : Date
+Question: CNN began broadcasting in what year ? Type: Date
+Type: Manner of an action
+Question: What the l behind the ir in the eye called ? Type Equ term
+Type: Date
+Question: What the former name of Zimbabwe ? Type: termType something
+Question: What is troilism ? Type: Definition of something
+: What is origin of the word , Type: of something
+: do you name to social security number ? Type Manner of an action
+: that of an employee Universal and Export ? Type Individual
+: anesthetic did Queen Victoria allow to be for the birth of her seventh , in 183 ? Type: Disease
+and medicine
+: Where isyer ’s rock ? Type location
+Question: What isymnophobia ? Type: Definition of something
+...
+Type burns the most calories ?
+Type Sport
+: In what book I find story of Aladdin ? Type In, book and piece an have sex ?
+Type: Manner of an action: What is the acron for rating forer ?
+Type Abbreviation
+: are the Baltic States ? Type: Definition of something
+: What is appearance , that violates the standards of sexual mor ? Type
+: Where did the May people live ? : location
+: What population Kansas ? Type number
+: was the hurr ? Type: Event
+: ’s a score aymnast exercise ? Type: number
+: year become a state ? Type: Date
+do go school ? Type Reason
+...
+Question: What is a fuel cell ?
+Type:
+LLMs’ Response:
+Definition of something
+LLMs’ Response after Subsquence Recovery:
+Definition of something
+Ground Truth:
+Definition of something
+Figure 9: Cases study on trec few-show learning in LongBench benchmark (Bai et al., 2023) in 2,000 constraint
+using GPT-3.5-Turbo.

@@ -1,0 +1,420 @@
+
+===== PAGE 1/22 =====
+ 
+  
+*xu.yonghui@hotmail.com 
+https://doi.org/10.65102/is2026255  Published: 30 April, 2026 
+Anno XLIII - Num. 1 - 2026 
+CER: Learning Causally Sufficient Evidence Sets for Verifiable and 
+Trustworthy RAG 
+Jizhang Tan1, Yonghui Xu2,* and Lizhen Cui3 
+1 School of Software, Shandong University, Jinan, 25000,Shandong, China 
+2 Joint SDU-NTU Centre for Artificial Intelligence Research (C-FAIR), Shandong University, 
+Jinan, 25000, Shandong, China  
+3 School of Software, Shandong University, Jinan, 25000, Shandong, China 
+ 
+ 
+SUMMARY: Aiming at the  problem that evidence selection in retrieval enhancement 
+generation focuses on semantic relevance, and it is difficult to ensure causal necessity and 
+minimum sufficiency, a retrieval enhancement generation method based on verifiable causal 
+sufficient evidence set was proposed. Method A counterfactual delete -replace intervention is 
+used to construct an evidence -level supervision signal. A pre -trained language model causal 
+re-ranking, R-GCN evidence complementary modeling, quality proxy function calibration, and 
+minimum sufficient set search are combined to jointly optimize the answer quality, evidence size, 
+and reasoning cost. Experiments on HotpotQA, HOVER, QASPER and ALCE datasets show 
+that the proposed method achieves F1 of 67.1 on HotpotQA and 82.3 on HO VER, with an 
+average evidence size reduction of 18% -22%. The context overhead is reduced by up to 60%, 
+and it maintains better robustness under the condition of conflict evidence and near -repeated 
+interference. The results show that the proposed method can effectively improve the verifiability, 
+compactness and stability of the retrieval enhancement generation system. 
+ 
+KEYWORDS: Retrieval enhancement generation; Counterfactual learning; Evidence graph 
+modeling; Verifiable generation 
+1 Introduction 
+Retrieve-augmented generation collaborates the external retrieval module and the large 
+language model generation process, which has become an important technical path for open -
+domain question answering, fact checking and scientific question answering. Ram et al. (2023) 
+proposed to dynamically access external evidence in context to enhance the knowledge 
+utilization ability of language models [ 1]. Siriwardhana et al. (2023) studied the domain 
+adaptation problem of RAG in open-domain question answering [2]. Katsis et al. (2025) further 
+constructed RAG evaluation benchmarks in multi-turn dialogue scenarios [9]. Related studies 
+have shown that external evidence access can improve the answer accuracy, reduce th e risk of 
+unfounded generation, and enhance the source traceability of results [ 1, 2, 9]. However, the 
+existing mainstream methods still mainly rely on BM25, dense retrieval or cross -encoder to 
+achieve semantic relevance ranking, and their optimization goal focuses on "retrieving relevant 
+text" rather than "identifying the really necessary evidence for the answer". Li et al. (2025) 
+studied the development path of generative information retrieval [12], and Huang et al. (2025) 
+pointed out that large model illusion control is closely related to evidence quality [ 13]. 
+
+===== PAGE 2/22 =====
+Tan et al. 
+2 
+Therefore, how to move from relevance selection to causal adequacy selection under the 
+framework of RAG has become a key issue to improve system trustworthiness and verifiability. 
+The prominent problem with existing methods is that highly correlated evidence does not 
+necessarily constitute causal support for the answer to hold. Russo et al. (2023) studied the task 
+of fact-checking explanation generation and pointed out that explanation quality depends not 
+only on content relevance, but also on the pertinence and adequacy of the supporting chain [3]. 
+Adlakha et al. (2024) proposed that correctness and faithfulness in question answering systems 
+are not completely consistent [ 6]. Chaturvedi et al. (2024) analyzed the true dependence of 
+language models on evidence through input intervention [ 18]. The examples of medical 
+questions and answers in the original manuscript show that for a drug efficacy question, the 
+relevance search will return multiple paragraphs such as trial results, trial protocols, approval 
+history, disease statistics, and guideline text, but only a few of the experimental evidence are 
+really determining the answer. 
+ 
+Figure 1: Figure: Relevance.based retrieval returns many related passages; causal filtering 
+keeps only the few that actually determine the answer 
+As shown in Figure 1, relevance retrieval returns "a large number of relevant texts", while 
+causal filtering retains only "a few key pieces of evidence that determine the answer". The 
+manuscript further points out that about 60% of the retrieved passages in  a typical scenario 
+belong to causal lazy evidence, that is, deletion does not change the validity of the answer, 
+which will directly cause context waste, increase the burden of manual verification, and 
+enhance the interference of conflict sources. 
+Around the above issues, RAG evidence selection faces three technical challenges. First, 
+evidence necessity judgment is essentially a counterfactual reasoning problem, which needs to 
+answer "is the answer invalid if a piece of evidence is removed", while traditio nal relevance 
+learning methods lack such counterfactual perception ability [ 4, 18]. Secondly, there is a 
+complex relationship among complementary, redundant and conflicting evidences. Glockner et 
+
+
+===== PAGE 3/22 =====
+INGEGNERIA SISMICA – INTERNATIONAL JOURNAL OF EARTHQUAKE ENGINEERING 
+3 
+al. (2024) studied the problem of supporting multiple evidences in ambiguous fact checking [7], 
+Zeng and Gao (2024) studied the reason generation mechanism in interpretable fact checking 
+[8], and Hosking et al. (2024) discussed the problem of multi-paragraph evidence organization 
+from the perspective of hierarchical indexing [16]. Third, under the constraints of limited token 
+budget and reasoning cost, evidence selection needs to simultaneously consider answer quality, 
+evidence minimality and context efficiency. Liu et al. (2024) found that long context does not 
+linearly improve model performance, and excessive evidence may weaken the utilization 
+efficiency of key evidence [20]. Wang et al. (2024) proposed that "retrieving the really needed 
+content" is more important than simply expanding the candidate set in open -domain question 
+answering [19]. 
+In view of the above shortcomings and challenges, this paper constructs a task of causal 
+sufficient evidence set selection, which elevates the evidence selection from the problem of 
+relevance ranking to the problem of causal contribution estimation. A counterfactual 
+supervision driven evidence contribution learning method is proposed, which describes the 
+marginal impact of candidate evidence on answer quality by deleting intervention and replacing 
+intervention. A framework called RAG is designed, which integrates evidence graph modeling 
+and minimal set search. It com bines pre -trained language model encoding, graph neural 
+network relationship propagation, quality proxy function calibration and cost constraint search 
+algorithm to effectively distinguish complementary evidence, redundant evidence and conflict 
+evidence. A nd the comprehensive advantages of this method in accuracy, minimality, 
+robustness and cost control are verified on multiple types of knowledge-intensive data sets [11, 
+17]. This research provides a new technic al path for building a retrieval enhanced generation 
+system with interpretability, auditability and engineering deployability. 
+2 Related Work 
+2.1 Retrieval and reranking methods in Retrieval Enhancement 
+Generation 
+Retrieval enhanced generation alleviates the kno wledge gap and illusion problems of large 
+language models in open domain question answering, fact checking and scientific question 
+answering by introducing external knowledge sources. Ram et al. (2023) proposed to access 
+retrieval results in context to enhance the knowledge utilization ability of language models [1]. 
+Siriwardhana et al. (2023) studied the domain adaptation mechanism of RAG in open -domain 
+question answering [ 2]. Li et al. (2025) reviewed the techni cal evolution of generative 
+information retrieval from matching -driven to generation -driven [ 12]. In the existing 
+technology links, BM25 relies on term frequency and inverse document frequency to achieve 
+efficient sparse recall, DPR uses dual coding structure to complete dense vector matching 
+between questions and documents, ColBERT retains fine -grained semantic alignment 
+information with token-level late interaction. Cross-Encoder improves the reranking accuracy 
+by jointly encoding t he query and the candidate paragraph. Hosking et al. (2024) further 
+discussed the hierarchical indexing problem in multi-segment evidence organization [16]. 
+These methods significantly improve the semantic matching ability of candidate evidences, 
+but their core optimization goal is still relevance ranking, rather than causal necessity 
+identification. Wang et al. (2024) show that the performance improvement of open -domain 
+question answering depends on whether the desired content is retrieved, not only on expanding 
+the size of the candidate set [ 19]. Park and Lee (2024) pointed out that imperfect retrieval can 
+significantly weaken the stability of retrieval augmented language models [ 4]. There fore, 
+
+===== PAGE 4/22 =====
+Tan et al. 
+4 
+BM25, DPR, ColBERT and Cross-Encoder can well answer "which evidence is relevant to the 
+question", but it is difficult to judge "which evidence has an irreplaceable supporting role for 
+the answer". This objective bias makes the existing retrieval and re-ranking methods, although 
+constituting the key foundation of RAG systems, still insufficient to directly support the 
+construction of sufficient evidence sets for verifiable causality. 
+2.2 Attribution, Interpretable, and verifiable Generation Methods in RAG 
+The research on attribution, explainable and verifiable generation in RAG mainly focuses on 
+whether the generated content can be adequately supported by external evidence, and whether 
+the model output maintains factual fidelity. Russo et al. (2023) studie d explanation generation 
+in a fact-checking scenario and pointed out that high-quality explanations need not only correct 
+conclusions, but also be consistent with supporting evidence and verifiable [ 3]. Adlakha et al. 
+(2024) further d istinguish the evaluation of question answering system into two dimensions: 
+correctness and faithfulness, emphasizing that a correct answer does not mean that the answer 
+is truly supported by evidence [ 6]. On this basis, Zeng and Gao (2024) studied justification 
+generation around interpretable fact checking, indicating that there is a close connection 
+between justification generation and evidence support [ 8]. Glockner et al. (2024) introduced 
+multiple evidence analysis into the verification of ambiguity claims and showed that evidence 
+support relations are not always single, certain and independent [ 7]. At the same time, Lyu et 
+al. (2024) systematically summarized the main technical paths of faithful model explanation in 
+NLP, and pointed out that the key of interpretability research is whether the explanation truly 
+reflects the decision basis of the model, rather than only providing a superficial reasonable 
+explanation [ 17]. Chaturvedi et al. (2024) analyzed the semantic faithfulness of language 
+models through input intervention, and further revealed the consistency problem between 
+model output and input evidence [18]. 
+This kind of research has significantly improved the interpretability and auditability of RAG 
+systems. However, the focus of existing methods is still on "whether the answer can be 
+supported" rather than "whether the supporting evidence has reached minimum and sufficient". 
+Rosenthal et  al. (2025) studied the task of long answer generation based on passages, 
+emphasizing that answer organization and evidence correspondence play an important role in 
+RAG evaluation [ 10]. Katsis et al. (2025) constructed multiple round s of RAG evaluation 
+benchmarks, which promoted the systematic analysis of the verifiability of retrieval 
+enhancement generation systems [ 9]. In addition, Huang et al. (2025) and Ji et al. (2023) 
+pointed out that insufficient external support, inaccurate evidence citation and context 
+redundancy are the core factors affecting the credibility of generation from the perspective of 
+large language model illusion and natural language generation illusion respectively [ 13, 14]. 
+Therefore, although the existing imputation, explainable and verifiable generation methods can 
+improve the ability of evidence support analysis, they rarely further describe the minimality, 
+complementarity and causal necessity  of evidence, and are not enough to directly support the 
+construction of verifiable causal sufficient evidence sets. 
+2.3 Counterfactual Learning and Causal Inference Methods 
+Counterfactual learning and causal inference methods provide important tools for model  
+decision basis analysis. Chaturvedi et al. (2024) tested the semantic fidelity of the QA model 
+by deleting intervention and negating intervention, and pointed out that high task performance 
+does not mean that the model really depends on the semantic conte nt of the input [18]. Lyu et 
+al. (2024) systematically sorted out the technical paths in faithful explanation research, such as 
+similarity analysis, model internal structure analysis, backpropagation attribution, 
+
+===== PAGE 5/22 =====
+INGEGNERIA SISMICA – INTERNATIONAL JOURNAL OF EARTHQUAKE ENGINEERING 
+5 
+counterfactual intervention and self-explanatory model [17]. In a generative system, Asai et al. 
+(2024) proposed Self -RAG, which controls the output factuality and citation quality through 
+retrieval, generation, and self -reflection. However, its focus i s still on self -checking and on -
+demand retrieval, rather than the explicit estimation of evidence necessity. The above studies 
+show that the deletion intervention, substitution intervention, robustness analysis and posterior 
+attribution methods can characterize the sensitivity of the model to input changes and provide 
+experimental evidence for the explanatory validity. 
+The existing methods still mainly stay at the input -level or output -level fidelity analysis 
+level, and lack of unified modeling of marginal contribution, complementary relationship and 
+redundant relationship under the condition of multiple evidence. The posterior attribution 
+method can identify high-impact features, but it is difficult to distinguish relevant contributions 
+from causally necessary contributions. Robustness analysis can reveal the vulnerability of the 
+model to perturbations, but usually does not directly serve the minimum sufficient evidence set 
+search. Although deletion or substitution interventions have causal analysis characteristics, they 
+are mostly used for overall input sensitivity assessment rather than evidence -level selection 
+optimization. Therefore, it is necessary to advance counterfactual interventions from a general 
+explanation framework to evidence -level causal contr ibution modeling, which provides a 
+methodological foundation for verifiable causally sufficient evidence set construction by 
+explicitly estimating the marginal impact of candidate evidence on answer quality. 
+3 Retrieval enhanced Generation of verifiable caus ally 
+sufficient Evidence sets 
+3.1 Task definition and formal modeling 
+Let the query be q and the set of candidate evidence be 𝐷 = {𝑑1, 𝑑2, … , 𝑑𝑛}, the generator is 
+G, and the answer quality function is F. Instead of selecting a number of highly relevant 
+passages from a candidate set, the problem of concern in this paper is to search for the minimal 
+sufficient evidence subset S⊆D from D that can support answer generation, given an answer 
+quality threshold θ. Therefore, the task goal can be defined as: on the premise of satisfying 
+F(q,S)≥θ, make the evidence set size |S| as small as possible, and further quantify the necessity 
+and contribution of each selected evidence to the final answer. In this modeling approach, the 
+evidence selection is transformed from re levance ranking to combinatorial optimization 
+problem under quality constraints, so that the evidence sufficiency, set minimization and result 
+verifiability can be described in a unified framework. 
+To describe the marginal role of candidate evidence in the current context, let C⊆D be the 
+current set of selected evidence and y ∈[0,1] denote the answer quality. Then the conditional 
+causal effect of evidence d is defined as follows. 
+𝑓(𝑑 ∣ 𝑞, 𝐶) ≈ 𝜏(𝑑 ∣ 𝑞, 𝐶) = 𝔼[𝑦 ∣ 𝐶 ∪ {𝑑}] − 𝔼[𝑦 ∣ 𝐶] (1) 
+where τ(d∣q,C) represents the gain of answer quality brought by adding evidence d to the 
+existing evidence set C. When τ(d ∣q,C) is large, the evidence provides irreplaceable new 
+support. When its value is close to zero, it indicates that there is strong redundancy between the 
+evidence and the current evidence set, or it only has superficial relevance but lacks substantial 
+support. Accordingly, the minimum sufficient evidence set search objective can be written as 
+follows. 
+
+===== PAGE 6/22 =====
+Tan et al. 
+6 
+S∗ = arg min
+S⊆D
+| S|,  s. t.  F(q, S) ≥ θ (2) 
+This optimization object ive takes the answer quality as the constraint and the minimum 
+evidence scale as the goal, which helps to suppress redundant evidence splicing and reduce 
+context overhead. 
+In order to make the answer quality assessment decomposable and auditable, the quali ty 
+function is defined as follows. 
+F(q, S) = w1 pentail(q, S) + w2 pcov(q, S) − w3 pcontra(q, S) − w4 plen(S) (3) 
+Here, pentail(q, S) represents the implication probability between the generated answer and 
+the evidence set,  pcov(q, S) represents the proportion of key entities, numerical and temporal 
+information in the answer covered by evidence, pcontra(q, S)  represents the degree of 
+contradiction between the answer statement and the evidence, plen(S) represents the context 
+length penalty term. This can be written as |S|/Kmax. By jointly modeling support, coverage, 
+contradiction and length cost, the answer quality no longer depends on a single correct rate 
+index, but can reflect the completeness and compactness of the evidence support chain. 
+In evidence-level verifiability analysis, the necessity score is defined as follows. 
+Nec(d) = max(0, Δydel(d))
+∑ maxd′∈S (0, Δydel(d′)) (4) 
+Here, ydel(d) represents the decrease in answer quality after removing evidence d. This 
+index is used to measure the relative contribution of a single piece of evidence to the overall 
+support chain. When Nec(d) is higher, it means that the evidence has stronger irrepla ceability 
+for the answer. When its value is low, it means that the evidence is more likely to belong to 
+complementary or redundant information. Based on the above definitions, conditional causal 
+effects, answer quality functions and necessity scores can be used in counterfactual supervision, 
+evidence re-ranking and minimal set search to jointly model the verifiable causal sufficient 
+evidence set. 
+3.2 Evidence Supervised Signal Construction with counterfactual 
+interventions 
+The core of evidence supervision signal construction is to transform the relevance judgment of 
+candidate evidence into a computable measure of answer quality change. The existing research 
+on fidelity analysis shows that input intervention can more effectively reveal the semantic basis 
+of the true dependence of the model. Chaturvedi et al. (2024) studied the relationship between 
+input intervention and semantic fidelity in question answering scenarios [ 18], and Lyu et al. 
+(2024) summarized the role of counterfactual interve ntion in model interpretation and causal 
+analysis [ 17]. On this basis, we learn to construct two types of counterfactual supervision 
+signals for the minimum sufficient evidence set: deletion intervention and replacement 
+intervention. Suppose that the training sample consists of a query q, a standard answer a ∗ and 
+a minimum sufficient evidence set E ∗. For any evidence d ∈E∗, we first perform a deletion 
+intervention to remove d from the evidence set and calculate the decline of the answer quality: 
+Δydel(d) = F(q, E∗) − F(q, E∗\{d}) (5) 
+If the quality of the answer decreases significantly after deletion, it means that the evidence 
+
+===== PAGE 7/22 =====
+INGEGNERIA SISMICA – INTERNATIONAL JOURNAL OF EARTHQUAKE ENGINEERING 
+7 
+has a strong necessity for the answer. A smaller decrease indicates that the evidence is more 
+likely to be complementary or redundant information. This mechanism uses the answer quality 
+function F as a bridge to convert whether evidence is necessary into a supervised numerical 
+signal. The whole counterfactual supervised construction flow is shown in Figure 2. 
+ 
+Figure 2: Counterfactual supervised construction process 
+Relying on deletion interventions alone may still suffer from retrieval bias, where certain 
+pieces of evidence exhibit high correlation due to long -term co-occurrence with the correct 
+answer, but do not nece ssarily provide irreplaceable causal support. To reduce this bias, 
+substitution intervention is further introduced in this paper. For each piece of target evidence d, 
+we construct hard negative samples d' that are semantically similar to it but have confli cting 
+facts, and calculate the quality change after replacement: 
+Δyrep(d) = F(q, E∗) − F(q, E∗ ∪ {d′}\{d}) (6) 
+The construction of hard negative samples adopts a two-stage strategy of "DPR recall + NLI 
+contradiction screening": Firstly, DPR is used to recall the T op-50 candidate paragraphs that 
+are semantically closest to d from the corpus, and then the evidence of belonging to E ∗ is 
+eliminated. Then, the remaining candidates are sorted according to the product of semantic 
+similarity and NLI contradiction score, an d the paragraph with the highest score is selected as 
+d'. This design ensures that the replacement evidence is close to the original evidence at the 
+topic level, but there is conflict with the evidence set at the time, fact or conclusion level, so as 
+to more accurately test whether the target evidence has real support. Finally, the deletion effect 
+and substitution effect are weighted and fused into a unified causal supervision signal: 
+Δy(d) = αΔydel(d) + (1 − α)Δyrep(d),  α = 0.7 (7) 
+Among them, a higher α is used t o strengthen the necessity judgment, and a lower 
+proportion of substitution effects is used to suppress the spurious contribution caused by 
+correlation co-occurrence. The obtained (q,C,d,Δy(d)) training samples can be directly used for 
+the supervised learning of the subsequent evidence contribution prediction network, so that the 
+model can learn the marginal causal effect of evidence under different context conditions. 
+3.3 Causal Evidence Re -ranking Network with Pre -trained Language 
+Models 
+After obtaining the counterfactual supervision signal Δy(d), we construct a causal evidence re-
+ranking network based on the pre -trained language model to estimate the marginal causal 
+contribution of the candidate evidence under the current context. If the query is q, the currently 
+
+
+===== PAGE 8/22 =====
+Tan et al. 
+8 
+selected evidence set is C, and the candidate evidence is d, then the model prediction target is 
+𝜏̂(d∣q,C), which means the incremental contribution of adding evidence d to the existing 
+evidence set C to the answer quality. The ma in body of the network adopts BERT -large or 
+DeBERTa-v3 as the coding backbone to make full use of the ability of large -scale pre-trained 
+language models in cross -sentence semantic modeling, long-range dependency representation 
+and fine-grained semantic matching. The training sample consists of quadruples (q,C,d,Δy(d)), 
+where C represents the partial evidence context and Δy(d) is obtained by fusing the deletion 
+intervention and replacement intervention described above. Thus, instead of relying solely on 
+query-evidence relevance, the reranking process shifts to a direct regression on the marginal 
+causal effect of candidate evidence. 
+The input layer adopts the concatenated sequence construction method: 
+𝑋 = [𝑞;  SUMMARY(𝐶);  𝑑] (8) 
+Here, SUMMARY(C) represents the context summary of the current evidence set C, which 
+can be obtained by sequentially concatenating the first 100 tokens of each evidence in the set. 
+When C= ∅, this part is set to an empty string. Such input design enables the model to 
+simultaneously perceive the semantics of the question, the state of the current support chain and 
+the content of the evidence to be evaluated, so as to learn the conditional judgment mechanism 
+of "whether the evidence still provides new support in the current context". Let t he global 
+semantic representation of the encoder output be: 
+hcls = PLM(X)[CLS] (9) 
+Then the marginal causal contribution regression is performed by using two layers of multi-
+layer perceptron: 
+τ̂(d ∣ q, C) = W2 σ(W1hcls + b1) + b2 (10) 
+Here, σ(⋅) represents the nonlinear activation function, and W1,W2,b1,b2 are the learnable 
+parameters. The final output is a single scalar, which characterizes the causal contribution 
+strength of the candidate evidence under the current evidence condition. 
+Our network is structurally a co nditional cross-encoder: the query, context summary, and 
+candidate evidence are jointly modeled in the same encoding space, which is able to explicitly 
+capture cross-segment interaction features without relying on static similarity estimates after 
+independent vector recall. Because SUMMARY(C) encodes the main information of the 
+selected evidence, the model can recognize two important phenomena in the inference process. 
+One is that the candidate evidence is highly repeated with the existing evidence, and its  
+𝜏̂(d∣q,C) will be depressed. The other is the candidate evidence, which may not be the most 
+similar to the query, but can supplement key entities, methods, values, or constraints, and its 
+predictive contribution will be significantly improved. The obtaine d causal reran score can be 
+used as the direct input for subsequent evidence graph modeling and minimum sufficient 
+evidence set search, thus providing a fine -grained, conditional, and regressible computational 
+basis for evidence selection. 
+3.4 Complementary Evidence Modeling Method fusing Graph Neural 
+Networks 
+Candidate evidence does not play an independent role in supporting answer generation, but has 
+multiple relationships such as complementarity, redundancy and conflict. Depending on the 
+
+===== PAGE 21/22 =====
+INGEGNERIA SISMICA – INTERNATIONAL JOURNAL OF EARTHQUAKE ENGINEERING 
+21 
+modal evidence chains. 
+References 
+[1] Ram O, Levine Y , Dalmedigos I, et al. In-context retrieval-augmented language models[J]. 
+Transactions of the Association for Computational Linguistics, 2023, 11: 1316-1331. 
+[2] Siriwardhana S, Weerasekera R, Wen E, et al. Improving the domain adaptation  of 
+retrieval augmented generation (RAG) models for open domain question answering[J]. 
+Transactions of the Association for Computational Linguistics, 2023, 11: 1-17. 
+[3] Russo D, Tekiroğlu S S, Guerini M. Benchmarking the generation of fact checking 
+explanations[J]. Transactions of the Association for Computational Linguistics, 2023, 11: 
+1250-1264. 
+[4] Park S I, Lee J Y . Toward robust ralms: Revealing the impact of imperfect retrieval on 
+retrieval-augmented language models[J]. Transactions of the Association for 
+Computational Linguistics, 2024, 12: 1686-1702. 
+[5] Rubin O, Berant J. Retrieval-pretrained transformer: Long-range language modeling with 
+self-retrieval[J]. Transactions of the Association for Computational Linguistics, 2024, 12: 
+1197-1213. 
+[6] Adlakha V , BehnamGhader P, Lu X H, et al. Evaluating correctness and faithfulness of 
+instruction-following models for question answering[J]. Transactions of the Association 
+for Computational Linguistics, 2024, 12: 681-699. 
+[7] Glockner M, Staliūnaitė I, Thorne J, et al. Ambifc: Fact-checking ambiguous claims with 
+evidence[J]. Transactions of the Association for Computational Linguistics, 2024, 12: 1-
+18. 
+[8] Zeng F, Gao W. Justilm: Few-shot justification generation for explainable fact -checking 
+of real-world claims[J]. Transactions of the Association for Computational Linguistics, 
+2024, 12: 334-354. 
+[9] Katsis Y , Rosenthal S, Fadnis K, et al. MTRAG: A multi-turn conversational benchmark 
+for evaluating retrieval-augmented generation systems[J]. Transactions of the Association 
+for Computational Linguistics, 2025, 13: 784-808. 
+[10] Rosenthal S, Sil A, Florian R, et al. CLAPnq: C ohesive L ong -form A nswers from P 
+assages in Natural Questions for RAG systems[J]. Transactions of the Association for 
+Computational Linguistics, 2025, 13: 53-72. 
+[11] Amar S, Shapira O, Slobodkin A, et al. A Unifying Scheme for Extractive Content 
+Selection Tasks[J]. Transactions of the Association for Computational Linguistics, 2025, 
+13: 1645-1671. 
+[12] Li X, Jin J, Zhou Y , et al. From matching to generation: A survey on g enerative 
+information retrieval[J]. ACM Transactions on Information Systems, 2025, 43(3): 1-62. 
+
+===== PAGE 22/22 =====
+Tan et al. 
+22 
+[13] Huang L, Yu W, Ma W, et al. A survey on hallucination in large language models: 
+Principles, taxonomy, challenges, and open questions[J]. ACM Transactions on 
+Information Systems, 2025, 43(2): 1-55. 
+[14] Ji Z, Lee N, Frieske R, et al. Survey of hallucination in natural language generation[J]. 
+ACM computing surveys, 2023, 55(12): 1-38. 
+[15] Lyu Y , Li Z, Niu S, et al. Crud-rag: A comprehensive chinese benchmark for retrieval -
+augmented generation of large language models[J]. ACM Transactions on Information 
+Systems, 2025, 43(2): 1-32. 
+[16] Hosking T, Tang H, Lapata M. Hierarchical indexing for retrieval -augmented opinion 
+summarization[J]. Transactions of the Association for Computatio nal Linguistics, 2024, 
+12: 1533-1555. 
+[17] Lyu Q, Apidianaki M, Callison -Burch C. Towards faithful model explanation in nlp: A 
+survey[J]. Computational Linguistics, 2024, 50(2): 657-723. 
+[18] Chaturvedi A, Bhar S, Saha S, et al. Analyzing semantic faithfulness of language models 
+via input intervention on question answering[J]. Computational Linguistics, 2024, 50(1): 
+119-155. 
+[19] Wang D, Huang Q, Jackson M, et al. Retrieve what you need: A mutual learning 
+framework for open -domain question answering[J]. Transactions of th e Association for 
+Computational Linguistics, 2024, 12: 247-263. 
+[20] Liu N F, Lin K, Hewitt J, et al. Lost in the middle: How language models use long 
+contexts[J]. Transactions of the association for computational linguistics, 2024, 12: 157-
+173. 

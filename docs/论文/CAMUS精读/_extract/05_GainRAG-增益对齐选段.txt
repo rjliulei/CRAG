@@ -1,0 +1,820 @@
+
+===== PAGE 1/12 =====
+Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 10746–10757
+July 27 - August 1, 2025 ©2025 Association for Computational Linguistics
+GainRAG: Preference Alignment in Retrieval-Augmented Generation
+through Gain Signal Synthesis
+Yi Jiang, Sendong Zhao*, Jianbo Li, Haochun Wang, Bing Qin
+Research Center for Social Computing and Interactive Robotics,
+Harbin Institute of Technology, China
+{yjiang,sdzhao,jbli,hcwang,qinb}@ir.hit.edu.cn
+Abstract
+The Retrieval-Augmented Generation (RAG)
+framework introduces a retrieval module to dy-
+namically inject retrieved information into the
+input context of large language models (LLMs),
+and has demonstrated significant success in var-
+ious NLP tasks. However, the current study
+points out that there is a preference gap be-
+tween retrievers and LLMs in the RAG frame-
+work, which limit the further improvement of
+system performance. Some highly relevant pas-
+sages may interfere with LLM reasoning be-
+cause they contain complex or contradictory
+information; while some indirectly related or
+even inaccurate content may help LLM gener-
+ate more accurate answers by providing sugges-
+tive information or logical clues. To solve this,
+we propose GainRAG, a novel approach that
+aligns the retriever’s and LLM’s preferences by
+defining a new metric, “gain”, which measure
+how well an input passage contributes to correct
+outputs. Specifically, we propose a method to
+estimate these gain signals and train a middle-
+ware that aligns the preferences of the retriever
+and the LLM using only limited data. In addi-
+tion, we introduce a pseudo-passage strategy
+to mitigate degradation. The experimental re-
+sults on 6 datasets verify the effectiveness of
+GainRAG1.
+1 Introduction
+Large Language Models (LLMs) (Achiam et al.,
+2023; Touvron et al., 2023) perform well in pro-
+cessing natural language tasks, but their knowledge
+is fixed in model parameters and is difficult to up-
+date dynamically over time (Ji et al., 2023; He
+et al., 2022). To tackle this issue, the Retrieval
+Augmented Generation (RAG) framework adds a
+retrieval module that brings in relevant external
+knowledge and integrates it into the input context
+*Corresponding author
+1The source code is publicly available athttps://github.
+com/liunian-Jay/GainRAG
+Figure 1: We analyze the preference gap between re-
+trieved passages and LLMs on 2 datasets: HotpotQA
+and 2Wiki2MultiHopQA. The top shows the proportion
+of correct and incorrect generations when the retrieved
+passage contains the gold answer. The bottom shows
+the proportion of whether the passage used contains the
+golden answer when the LLM response is correct.
+of the LLMs. This approach has shown impressive
+results across various natural language processing
+tasks (Gao et al., 2023; Lewis et al., 2020). Pre-
+vious work is devoted to solving two problems,
+namely, retrieving more relevant informationin
+retrieval and effectively utilizing context to gener-
+ate the correct answerin generation. However,
+they fail to address the preference gap between
+the retriever and the LLMs. Recent studies have
+highlighted that while retrieved passages may be
+relevant, they are not necessarily preferred for gen-
+eration. In other words, only passages that align
+with the LLM’s preferences can provide meaning-
+ful gain and enhance generation performance.
+Specifically, existing retrievers are usually de-
+signed based on human-defined relevance criteria,
+such as whether a passage directly contains the
+answer to a question (Ke et al., 2024). However,
+this approach does not fully align with the way
+LLMs process information. Some highly relevant
+passages may actually disrupt LLMs reasoning by
+introducing complexity or contradictions, while
+some seemingly unrelated or even partially incor-
+rect content can help by offering useful hints or
+10746
+
+===== PAGE 2/12 =====
+Figure 2: Illustration of the GainRAG framework. The GainRAG workflow, preference signal synthesis, and selector
+distillation fine-tuning are shown respectively.
+logical cues (Dong et al., 2024; Cuconasu et al.,
+2024). Therefore, retrieval should shift its focus
+from traditional “relevance” to “gain”—prioritizing
+information that helps LLMs generate more accu-
+rate results.
+To examine and validate this preference gap,
+we retrieve 100 relevant passages for each sam-
+ple on two multi-hop question-answering datasets.
+Each passage is used to enhance the sample query
+for evaluation. As shown at the top of Fig. 1, we
+find that even when the retrieved passage contains
+the correct answer, nearly half of the samples still
+generate incorrect responses, indicating that while
+these passages are relevant, they are not particu-
+larly beneficial for generation. As shown at the
+bottom of Fig. 1, in most cases where the gener-
+ation is correct, the passages used do not directly
+contain the answer. Instead, some passages that
+indirectly provide answers or clues may be less
+relevant but more beneficial, as they align better
+with the LLM’s preferences.
+Existing work aligns the retriever with the
+LLM’s preferences mainly by fine-tuning the re-
+triever or training both together. For example, Re-
+plug (Shi et al., 2023b) aligns the retriever with
+LLM preferences by training the retriever directly,
+while RA-DIT (Lin et al., 2023) uses dual training.
+However, this approach requires a large amount
+of high-quality data and is difficult to implement
+in real-world industrial settings. There are also
+some training middleware to align language model
+preferences, such as BGM (Ke et al., 2024) and
+DPA-RAG (Dong et al., 2024), but their perception
+and measurement of LLM preferences are coarse,
+capturing only basic patterns without a detailed
+understanding of nuanced differences.
+To address the above challenges, we introduce a
+middleware between the retriever and the LLM to
+solve the problem of inconsistent preferences be-
+tween the two, that is, the most profitable passages
+can be selected from the large number of passages
+retrieved by the retriever. Specifically, we intro-
+duce a method to quantify LLM’s preference based
+on based on perplexity and contrastive decoding.
+This enables passage gain calculation and mitigates
+the LLM’s overconfidence bias. Secondly, we use
+this to synthesize a small number of samples to dis-
+till the preference perception ability to the selector.
+Finally, we introduce a pseudo-passage strategy to
+prevent situations where all retrieved passages are
+not profitable. Together with the selector, it miti-
+gates degradation and enables efficient integration
+of internal and external knowledge.
+In general, our contributions can be summarized
+as follows:
+• We analyze the preference gap between re-
+trievers and LLMs, quantifying the LLM’s
+preference for passages by defining “gain” and
+introducing GainRAG to address this gap.
+• We provide a selector and introduce a pseudo-
+passage strategy that work together to not
+only avoid degeneration and triviality, but also
+10747
+
+===== PAGE 3/12 =====
+achieve efficient integration of internal and ex-
+ternal knowledge.
+• We train with very few samples and validate
+on 6 datasets. The results show excellent per-
+formance and generalization of GainRAG.
+2 Related Works
+2.1 Retrieval-augmented Generation
+In recent years, in order to solve the problems of
+outdated knowledge in the model and hallucination
+of large language models, retrieval-augmented gen-
+eration has been introduced (Fan et al., 2024; Gao
+et al., 2023), and many efforts have been made in
+two aspects: “how to retrieve more relevant infor-
+mation” including retriever fine-tuning (Nian et al.,
+2024) and query optimization (Ma et al., 2023;
+Wang et al., 2023) and “how to better use the re-
+trieved information to generate answers” including
+special fine-tuning (Wang et al., 2024; Zhang et al.,
+2024) and decoding strategies (Shi et al., 2023a).
+2.2 Retriever-LLM Preference Alignment
+The misalignment between the preferences of the
+retriever and LLM results in retrieved information
+being “relevant” but not always “useful”. There are
+many existing works that have made efforts to solve
+this problem. Replug (Shi et al., 2023b) and Al-
+tas (Izacard et al., 2022) use LLM to supervise and
+guide the fine-tuning of the retriever. RA-DIT (Lin
+et al., 2023) uses dual training allows the language
+model to guide the training of the retriever and the
+language model to adapt to the retrieved informa-
+tion. However, these methods usually require a
+large amount of data, which makes the resources
+expensive and huge. DPA-RAG (Dong et al., 2024)
+synthesizes data and trains the reranker and LLM
+to align the preferences of the two. BGM (Ke et al.,
+2024) trains an intermediate to complete the rear-
+rangement and selection of information from the
+coarsely ranked retriever. These methods simply
+do not clearly define and quantify this preference,
+which may lead to deviations in alignment. Differ-
+ent from them, we propose a method to quantify the
+preference, so that a small amount of data can be
+synthesized through LLM to fine-tune the selector
+and achieve alignment between the two.
+2.3 Bridge Between Retriever and LLM
+Many existing works achieve RAG optimization
+by providing a bridge between the retriever and
+LLM. Rerankers (Glass et al., 2022) such as BGE-
+reranker (Xiao et al., 2024) are the most common
+middleware, which can find more accurate passages
+from the information recalled by the retriever. Com-
+pressors such as RECOMP (Xu et al., 2024) and
+rewriters (Ma et al., 2023; Wang et al., 2023) are
+also commonly used bridges, which compress the
+retrieved passages to achieve denoising and solve
+the problem of context overload. Similar to them,
+GainRAG we proposed introduces a preference se-
+lector to select the optimal passage, which achieves
+score perception and avoids excessively long con-
+text.
+3 Methodology
+In this section, we introduce GainRAG (Fig. 2),
+starting with the synthesis and motivation of the
+gain signal, followed by selector training, and con-
+cluding with the GainRAG workflow.
+3.1 Preliminaries
+Before discussing GainRAG, we first provide a for-
+mal definition of the RAG problem. Given a query
+qand a corpus of documents D, RAG systems typ-
+ically follow a retrieval-then-reading framework.
+In this approach, the retriever selects relevant pas-
+sages C = {c1,c2,,c k}⊂D from the entire cor-
+pus D, and the generator model (LLM) utilizes
+these passages C to generate the answer ˆa. This
+process can be represented as:
+C = R(q,D,k),
+ˆa= G(P(q,C)), (1)
+where Rdenotes the retrieval function that selects
+krelevant passages, Prepresents the prompt tem-
+plate that combines qand C, and Gis the generator,
+i.e., the LLM, which generates the final answer ˆa.
+3.2 Gain signal to quantify preference
+To make the passage used meet the preferences of
+the LLM, we need to quantify the benefit of a pas-
+sage for the LLM to answer a question. To achieve
+this goal, we introduce contrastive decoding (Li
+et al., 2022) and calculate the perplexity (Li et al.,
+2023) after contrastive decoding.
+Perplexity In instruction tuning, the model is
+trained to maximize the likelihood of a response
+given the instruction. Thus, perplexity (PPL) serves
+as an indicator of difficulty (Li et al., 2023, 2024).
+Specifically, the PPL of a given sample (q,a) is
+10748
+
+===== PAGE 4/12 =====
+defined as
+PPL(a |q) = exp
+(
+−1
+N
+N∑
+j=1
+log p(aj |q, a1, . . . , aj−1)
+)
+.
+(2)
+Similarly, we can also use perplexity to measure
+how difficult it is for the LLM to generate the cor-
+rect answer afor question qgiven cin RAG.
+PPL(a |q, c) = exp
+(
+−1
+N
+N∑
+j=1
+log p
+(
+aj |q, c, a1, . . . , aj−1
+)
+)
+.
+(3)
+Contrastive Perplexity The indicator PPL(a |
+q,c) indicates the difficulty of the LLM to gener-
+ate answers through query qand context c, but it
+cannot distinguish whether the answer generation
+is driven by context cor the LLM’s internal knowl-
+edge. Therefore, directly using PPL for passage
+screening is biased. Inspired by CAD (Shi et al.,
+2023a), we introduce contrastive perplexity, which
+calculates perplexity using contrastive decoded log-
+its (Li et al., 2022) to measure the gain of context
+c for answering a. This mitigates bias from the
+model’s internal knowledge, enabling a more ac-
+curate quantification of the gain from context cto
+query q. Given our modeling of the internal prior
+p(at |q,a<t), the probability distribution of the
+LLM output is adjusted as:
+at ∼˜p(at |c,q,a <t)
+∝p(at |c,q,a <t)
+(p(at |c,q,a <t)
+p(at |q,a<t)
+)α
+,
+where pis the original probability distribution from
+the LLM, ˜p is the distribution adjusted via con-
+trastive decoding, a<t is the generated sequence,
+and αis a hyperparameter controlling the degree
+of adjustment. After rearranging the formula,
+at ∼softmax
+[
+(1 +α) logitθ(at |c,q,a <t)
+−αlogitθ(at |q,a<t)
+]
+. (4)
+Therefore, the gain of passage c on the correct
+answer agenerated by the LLM for question qcan
+be quantified as M(c,a |q), formally,
+M(c, a|q) = exp
+(
+−1
+N
+N∑
+j=1
+log ˜p
+(
+aj |q, c, a1, . . . , aj−1
+)
+)
+.
+(5)
+3.3 Selector between LLM and Retriever
+To effectively align the retriever’s output with with
+the preferences of the LLM, we introduce a mid-
+dleware, the selector, to identify the most benefi-
+cial passages. This selector leverages the context-
+gain-aware approach to refine passage selection,
+ensuring that the information fed into the LLM
+maximally enhances its performance.
+The selector is formulated as a gain estimation
+problem, where gain estimates are distilled into a
+learnable function f(q,c; θ) →ˆv, where θis the
+trainable parameter of the model. We employ the
+BGE pre-trained model as the foundation for the
+selector, defining its function mapping as:
+ˆV = [f(q,c0),...,f (q,ck)] , (6)
+where ˆV denotes the predicted gain values for the
+retrieved passages Cwith respect to query q. This
+formulation enables the selector to effectively rank
+passages, ensuring that the most relevant and gain-
+ful content is utilized by the LLM.
+3.4 Pseudo-passage Strategy
+While increasing the number of retrieved passages
+raises the likelihood of finding useful information,
+passage selection can still become degenerate, that
+is, all retrieved passages do not provide any useful
+information, or augmenting with each retrieved
+passage may be worse than LLM direct response.
+To address this challenge, we introduce the
+pseudo-passage strategy. Concretely, before select-
+ing any external passages, we generate a pseudo-
+passage c0 by prompting the LLM with the query.
+Formally, we define:
+c0 = G(P0(q)), (7)
+where P0 refers to the prompt template used to gen-
+erate the pseudo-passage. This pseudo-passage c0
+is then added to the selector’s candidate list along-
+side the truly retrieved passages.
+This strategy reduces over-reliance on poten-
+tially unhelpful retrieved passages and ensures that
+the selection of passages is always gain-oriented.
+Consequently, the pseudo-passage strategy not only
+mitigates degradation but also promotes the col-
+laborative and efficient integration of internal and
+external knowledge of the LLM, ultimately leading
+to more robust performance.
+3.5 Training of the LLM Preference Selector
+As shown in Fig. 2, we train a middleware, i.e.,
+selector, to align the preferences of the LLM by
+selecting the most beneficial passage.
+Data Construction Starting with a set of QA
+pairs, for each {q,a}pair, we first retrieve k
+relevant passages C = {c1,...,c k}, and then
+10749
+
+===== PAGE 5/12 =====
+calculate the gain to construct the training set
+{(qi,ai,cj
+i,vj
+i) | vj
+i = M(cj
+i,ai | qi)}. Addi-
+tionally, to mitigate degradation, we generate and
+add a pseudo-passage c0 to the set. Algorithm 1
+summarizes this process.
+Training Loss To make the selector aware of
+the relative gains of different con the same q, we
+refer to Shi et al. (2023b); Lin et al. (2023) and
+use distillation loss. Note that due to the long-tail
+distribution of V and the large values at the tail, the
+label V we actually use is a simple transformation,
+that is, v = −log(v+ 1). The distillation loss is
+calculated as follows,
+P = softmax(V), V = [v1,...,v k],
+Q = softmax( ˆV), ˆV = [ˆv1,..., ˆvk],
+L= KL(P ∥Q) =
+∑
+i
+Pilog Pi
+Qi
+.
+(8)
+3.6 GainRAG Inference Workflow
+After obtaining the selector, it acts as a middleware
+to align preferences between the retriever and the
+LLM.
+Specifically, when a query q comes, we first
+prompt the LLM to generate the internal informa-
+tion about this query and use the retriever to retrieve
+several relevant passages. Formally,
+c0 = G(q), (9)
+[c1,...,c k] =R(q,D,k), (10)
+After getting all the passages, we use the selector
+to predict the gain of these passages forqand select
+Algorithm 1 Gain Signal Construction
+Input: Original Dataset Do = {(q,a),... }, Cor-
+pus D
+Output: Enriched dataset Dv = {(q,c,v ),... }
+1: Initialize Dv ←∅ ▷Initialize
+2: for (q,a) ∈Do do
+3: c0 ←G(P0(q)) ▷Generate
+pseudo-passage
+4: [c1,...,c k] ←R(q,D,k) ▷Retrieve
+relevant passages
+5: for c∈{ci |i= 0...k }do
+6: Compute v= M(c,a |q)
+7: Add (q,c,v ) to Dv
+8: end for
+9: end for
+10: return Dv ▷Return the enriched dataset
+Algorithm 2 GainRAG Inference Workflow
+Input: Query q, Corpus D
+Output: Answer ˆa
+1: c0 ←G(P0(q)) ▷Generate pseudo-passage
+2: [c1,...,c k] ←R(q,D,k)
+3: ˆV ←[] ▷Initialize score list
+4: for i←0 to kdo ▷Iterate through all
+passages
+5: ˆV[i] ←f(q,ci) ▷Compute score for ci
+6: end for
+7: ˆi∗←arg maxˆV
+8: c∗←cˆi∗ ▷Select the best passage c∗
+9: ˆa←G(q,c∗) ▷Predict the answer
+10: return ˆa ▷ Return the final answer
+the passage with the highest gain. Formally,
+c∗= arg max
+c∈{c0,c1,...,ck}
+f(q,c) (11)
+Finally, we use the selected optimal passage for
+enhanced generation to obtain the predicted answer.
+In terms of formula,
+ˆa= G(q,c∗). (12)
+Algorithm 2 summarizes this process.
+4 Experiments
+In this section, we report our experimental details
+and results, and provide an experimental analysis
+of GainRAG.
+4.1 Implementation Details
+Training Data We randomly selecte 20k samples
+from the HotpotQA training set and about 4k from
+the WebQuestions training set. For each sample,
+we gathere 21 relevant passages: 20 retrieved us-
+ing the most common retriever Contriever (Izacard
+et al., 2021) and 1 generated internally. We then
+applie Algorithm 1 to add relevant passages and fil-
+ter out samples where the passage with the highest
+gain is incorrectly generated, resulting in about 10k
+samples. The decoding αis set to 0.5 according to
+CAD (Shi et al., 2023a).
+Training Details We use LLama3-8b to generate
+preference values and BGE-reranker-base (Xiao
+et al., 2024) for the selector’s initial weights, train-
+ing for 2 epochs. All experiments are conducted on
+a single A100 with 80G memory.
+Inference Details During inference, we use Con-
+triever (Izacard et al., 2021) as the retriever and
+10750
+
+===== PAGE 6/12 =====
+HotpotQA 2WikiMultiHopQA WebQuestionsMethod EM F1 Avg EM F1 Avg EM F1 Avg
+w/o retrieval
+Naive 22.40 22.44 22.42 26.80 20.44 23.62 44.39 35.90 40.14
+GenRead 31.00 30.50 30.75 30.60 25.24 27.92 47.69 31.42 39.55
+w/ retrieval
+Standard RAG 31.80 33.23 32.51 23.40 21.81 22.61 35.04 33.26 34.15
+Self-RAG 30.60 18.83 24.71 34.00 17.33 25.67 42.18 23.14 32.66
+Rerank 35.80 37.45 36.62 24.20 22.94 23.57 37.50 35.55 36.52
+GainRAG 39.60 41.99 40.79 31.40 28.92 30.16 42.51 39.17 40.84
+Table 1: EM/F1/Avg(EM,F1) of different methods experimented on datasets HotpotQA, 2WikiMultiHopQA,
+WebQuestions. The best and second best scores are highlighted in bold and underlined, respectively.
+SQuAD NaturalQA TriviaQAMethod EM F1 Avg EM F1 Avg EM F1 Avg
+w/o retrieval
+Naive 18.50 21.57 20.03 31.25 29.02 30.13 60.20 59.96 60.08
+GenRead 21.13 20.90 21.01 38.48 32.77 35.62 64.15 58.94 61.55
+w/ retrieval
+Standard RAG29.53 32.46 30.99 38.14 36.82 37.48 62.16 61.87 62.02
+Self-RAG 27.69 14.78 21.23 35.60 39.78 37.69 61.65 35.21 48.43
+Rerank 29.36 31.84 30.60 30.86 30.60 30.73 65.55 65.09 65.32
+GainRAG 34.65 37.55 36.10 41.97 41.27 41.62 67.29 66.73 67.01
+Table 2: EM/F1/Avg(EM,F1) of different methods experimented on datasets SQuAD, NaturalQA, TriviaQA. The
+best and second best scores are highlighted in bold and underlined, respectively.
+LLama3-8B as the generator. We set the initial
+retrieval setting k to 100 because 100 has a high
+coverage, as shown in Appendix B analysis ex-
+periment. For all datasets, we use 21M English
+Wikipedia (Karpukhin et al., 2020) dump as the
+source passages for the retrieval. Prompts for the
+experiments can be found in Appendix D
+Task Type Datasets # Samples
+Multi-HopQA2WikiMultiHopQA 500
+HotpotQA 500
+OpenQA
+WebQuestions 2032
+NaturalQA 3610
+SQuAD 10570
+TriviaQA 11313
+Table 3: Description of tasks and evaluation datasets.
+4.2 Datasets and Evaluation Metrics
+Eval Datasets To verify the effectiveness and gen-
+eralization of GainRAG, we use the open domain
+question answering datasets WebQuestion (Berant
+et al., 2013), NaturalQA (Kwiatkowski et al., 2019),
+TriviaQA (Joshi et al., 2017) and SQuAD (Ra-
+jpurkar, 2016), as well as the complex multi-hop
+question answering datasets HotpotQA (Ho et al.,
+2020a) and 2WikiMultiHopQA (Ho et al., 2020b).
+The statistics are shown in Table 3. Its detailed
+description can be found in Appendix A.
+Evaluation Metrics We calculate exact match
+(EM) and F1 scores. Following Asai et al. (2023);
+Mallen et al. (2022), we apply a non-strict EM
+metric, which considers a model’s generation cor-
+rect if it includes the golden answer, rather than
+requiring an exact match. F1 measures the overlap
+between the predicted and golden answers. Note
+that in our study, longer responses tend to increase
+EM scores due to higher matching probabilities,
+but often lower F1 scores due to irrelevant content.
+Therefore, the average of both metrics may be a
+more balanced evaluation.
+4.3 Baselines
+We selected several of the most common meth-
+ods for comparison. 1) StandardRAG, which is
+the most classic “retrieve-then-read” paradigm. 2)
+GenRead (Yu et al., 2022): Its retriever can be
+seen as itself since it uses self-generated context to
+answer questions. It has almost no preference for
+misalignment, but there may be insufficient infor-
+mation. 3) Self-RAG (Asai et al., 2023): Through
+adaptive retrieval and self-criticism, it alleviates
+10751
+
+===== PAGE 7/12 =====
+Method HotpotQA 2WikiMultiHopQA WebQuestions NaturalQA
+EM F1 Avg EM F1 Avg EM F1 Avg EM F1 Avg
+Standard RAG 31.80 33.23 32.51 23.40 21.81 22.61 35.04 33.26 34.15 38.14 36.82 37.48
+w/o all 35.80 37.45 36.62 24.20 22.94 23.57 37.50 35.55 36.52 30.86 30.60 30.73
+w/o pseudo 37.80 40.65 39.23 27.20 24.88 26.04 41.24 38.97 40.11 41.25 40.94 41.09
+w/o distillation 34.20 35.85 35.02 29.60 26.68 28.14 43.21 36.66 39.94 32.41 31.39 31.90
+GainRAG 39.60 41.99 40.79 31.40 28.92 30.16 42.51 39.17 40.84 41.97 41.27 41.62
+Table 4: Ablation studies, including: w/o all (removing all modules i.e., the ordinary reranker), w/o pseudo
+(removing the strategy for generating pseudo-passage, w/o distillation (removing the distillation fine-tuning.)
+the preference misalignment problem to a certain
+extent. 4) Rerank (Glass et al., 2022; Xiao et al.,
+2024): It is a supplement to the classic RAG. It adds
+middleware between the retriever and the LLM.
+Following the “retrieve-rerank-read”, we use the
+BGE-Reranker-base model. For fairness, Rerank
+has the same settings as ours. StandardRAG and
+Self-RAG also only use top-1. The rest of the set-
+tings follow the settings of their original papers.
+4.4 Main Results
+Experimental results are presented in Table 1 and
+Table 2, and we can get the following analysis:
+1) Our method achieves state-of-the-art perfor-
+mance on almost all datasets. Despite using only a
+small subset of HotpotQA and WebQuestions for
+data synthesis, it generalizes well across datasets,
+demonstrating the robustness of GainRAG.
+2) In WebQuestions, RAG methods generally
+underperform compared to those without external
+knowledge, suggesting that retrieval is not always
+beneficial. In cases of preference misalignment,
+retrieved passages can even be harmful. However,
+our approach still achieves the best average perfor-
+mance.
+3) The reranking method outperforms other base-
+lines, proving that middleware integration is both
+simple and effective. By leveraging a small amount
+of data to mitigate preference misalignment, our
+method significantly surpasses standard reranker.
+4.5 Ablation Study
+In order to verify the effectiveness of each mod-
+ule, we conducted ablation experiments on several
+datasets. The results, shown in Table 4, confirm
+that every module plays a crucial and irreplaceable
+role. The key findings are:
+1) Without distillation fine-tuning, performance
+drops significantly, highlighting the importance of
+preference alignment. However, due to the exis-
+tence of the pseudo-passage strategy, the perfor-
+Figure 3: Illustration of gain. Changes in recall of the
+gold answer and downstream performance after using
+GainRAG.
+mance can still be significantly improved over the
+common methods.
+2) When pseudo passage strategy is absent, per-
+formance drops on some datasets significantly but
+not all. It shows that it plays a significant role
+when there is a degenerate solution, that is, when
+the correct preferred passage cannot be retrieved.
+3) Pseudo passages and preference perception
+fine-tuning are complementary and essential. To-
+gether, they prevent degenerate solutions and im-
+prove passage selection, aligning preferences be-
+tween the retriever and the LLM.
+4.6 Effect of Preference Selection
+In order to explore why GainRAG improves the
+response performance of downstream LLMs, we
+removed the pseudo-passage strategy and calcu-
+lated the changes in Recall@1 and downstream
+generation metrics.
+As shown in Fig. 3, we find that there are three
+general cases. 1) Our selector sometimes signifi-
+cantly improves the Recall@1, which further im-
+proves downstream performance. 2) Our selector
+does not significantly improve the Recall@1, but
+the downstream performance are significantly im-
+10752
+
+===== PAGE 8/12 =====
+proved. 3) Our selector reduces the Recall@1, but
+the downstream performance are significantly im-
+proved.
+Case 1 is intuitive, while Cases 2 and 3 demon-
+strate that our selector’s impact goes beyond just
+relevance, highlighting the benefits of selection
+based on gain. This further confirms the effective-
+ness of our approach.
+Figure 4: Illustration of the pseudo-passages generated
+for each dataset to avoid degenerate solutions.
+4.7 What is the Effect of Pseudo-passage?
+To examine the role of pseudo-passages in mitigat-
+ing performance degradation, we analyze their us-
+age across different datasets. Specifically, we count
+the overall use of pseudo-passages, as shown in the
+right part of Fig. 4. In addition, we replace these
+cases with non-pseudo-passage with the largest
+gain and performed a Win-Tie-Lose comparison,
+as shown in the left part of Fig. 4.
+In many cases, internally generated passages
+are selected, with internal knowledge used in 50%
+of the cases on 2WikiMultiHopQA. This is con-
+sistent with the comparative experiment, which
+shows that GenRead significantly improves per-
+formance on 2WikiMultiHopQA, highlighting the
+value of LLM-generated passages for this dataset.
+Additionally, the Win-Tie-Lose comparison reveals
+that the number of winning cases after replacing
+pseudo-passages with the highest-gain passages far
+outweighs the losing cases, further demonstrating
+the effectiveness of pseudo-passages in alleviating
+degradation.
+4.8 Synthetic Signal Analysis
+To explore the effect of contrastive decoding debi-
+asing, we use the ordinary PPL synthetic signal to
+fine-tune the selector under the same settings. Its
+performance and changes are shown in Table 5.
+We find that contrastive debiasing is crucial, as
+removing it weakens preference perception for in-
+dividual passages. This is because this strategy en-
+hances the model’s perception of gain rather than
+just relevance, thereby alleviating over-reliance on
+LLM internal knowledge.
+Datasets EM / F1/ Avg(EM,F1)
+HotpotQA 38.2 (↓1.40)/ 41.38 (↓0.61)/ 39.79 (↓1.00)
+2WikiMQA 29.4 (↓2.00)/ 27.12 (↓1.80)/ 28.26 (↓1.90)
+Table 5: Performance degradation after removing con-
+trastive decoding
+4.9 In-Depth Comparison with the Reranker
+To explore the impact of the number of selector
+choices on performance and compare it with the
+reranker, we set the selector to the interval [1,5]
+and observe the performance changes, as shown in
+Fig. 5. The results reveal the following:
+1) Increasing K significantly boosts the recall
+rate, as expected, since more passages increase the
+likelihood of including the gold answer.
+2) For our selector, selecting the top passage
+is usually sufficient. Even for general rerankers,
+increasing K does not improve downstream gener-
+ation performance, and longer contexts even add
+overhead and may be harmful.
+3) While the recall rate increases, down-
+stream generation performance remains largely un-
+changed, highlighting the scientificity and rational-
+ity of selection. This further supports the observa-
+tion that simply including the gold answer does not
+guarantee correct generation.
+Figure 5: As the number of passages increases, the
+changes in recall and downstream generation perfor-
+mance. The left part is the change of our selector, the
+right side is the BGE-reranker, and the upper and lower
+parts are recall and Avg(EM, F1) respectively.
+10753
+
+===== PAGE 11/12 =====
+Fangyuan Xu, Weijia Shi, and Eunsol Choi. 2024. Re-
+comp: Improving retrieval-augmented lms with con-
+text compression and selective augmentation. In The
+Twelfth International Conference on Learning Repre-
+sentations.
+Wenhao Yu, Dan Iter, Shuohang Wang, Yichong
+Xu, Mingxuan Ju, Soumya Sanyal, Chenguang
+Zhu, Michael Zeng, and Meng Jiang. 2022. Gen-
+erate rather than retrieve: Large language mod-
+els are strong context generators. arXiv preprint
+arXiv:2209.10063.
+Tianjun Zhang, Shishir G Patil, Naman Jain, Sheng
+Shen, Matei Zaharia, Ion Stoica, and Joseph E Gonza-
+lez. 2024. Raft: Adapting language model to domain
+specific rag. arXiv preprint arXiv:2403.10131.
+A Dataset
+Here, we introduce in detail the datasets we used,
+which are seven datasets on four tasks.
+2WikiMultiHopQA (Ho et al., 2020b) and Hot-
+potQA (Ho et al., 2020a): Both datasets are
+multi-hop question answering datasets based on
+Wikipedia. Considering the limitation of exper-
+imental cost, we used the sub-sampling set pub-
+lished by Trivedi et al. (2022); Kim et al. (2024),
+which is obtained by extracting 500 questions from
+the validation set of each dataset.
+WebQuestions (Berant et al., 2013): Con-
+structed from questions posed by the Google Sug-
+gest API, where the answers are specific entities
+listed in Freebase.
+NaturalQA (Kwiatkowski et al., 2019): A
+dataset designed to support comprehensive QA sys-
+tems. It consists of questions from real Google
+search queries. The corresponding answers are text
+spans from Wikipedia articles, carefully identified
+by human annotators.
+SQuAD (Rajpurkar, 2016): It is a dataset for
+evaluating reading comprehension, created by an-
+notators who generate questions based on the doc-
+uments they read. It is widely used for training and
+testing open-domain QA systems.
+TriviaQA (Joshi et al., 2017): A compilation
+of trivia questions paired with answers, both origi-
+nally pulled from online sources.
+B Coverage Study
+To analyze the performance of the original retriever,
+we conducted experiments on four datasets. Specif-
+ically, we used the retriever to retrieve [1, 5, 10,
+20, 50, 100] paragraphs respectively and calculated
+the recall, EM coverage, and F1 coverage. For EM
+coverage, we used each paragraph to enhance the
+query separately, and as long as there is one correct
+response, it is considered to be covered. For EM
+coverage, we used each paragraph to enhance the
+query separately, took the response with the largest
+F1 value, and calculated the average of the overall
+dataset.
+As shown in Fig. 6,Fig. 7 and Fig. 8, as K in-
+creases, the recall and coverage will steadily in-
+crease. When retrieving 100, the coverage is large
+enough and far exceeds that of the current state-of-
+the-art RAG method.
+Figure 6: Illustration of the change in recall as the num-
+ber of retrievals K increases
+Figure 7: Illustration of the change in EM coverage as
+the number of retrievals K increases
+Figure 8: Illustration of the change in F1 coverage as
+the number of retrievals K increases
+10756
+
+===== PAGE 12/12 =====
+C Training Details
+We use LLama3-8b as our generator for generating
+preference values and BGE-reranker-base (Xiao
+et al., 2024) for initializing the selector. We train
+selection for 2 epochs. During fine-tuning, we
+set train-group-size to 16 and batch-size to 8. In
+addition, during training, we randomly select 16
+out of 21 passages to ensure generalization. The
+rest of the settings follow the official fine-tuning
+script (Xiao et al., 2024). Regarding the training
+data, we randomly selected 20,000 samples from
+the Hotpot training set and all 3,778 samples from
+the WebQuestion training set. After filtering, we
+finally obtained 14,084 training data. All experi-
+ments are conducted on a single A100 with 80G
+memory.
+D Prompt Templates
+All the prompt templates used by our proposed
+GainRAG are shown in Table 6.
+Task Task Instruction
+Generation {passage} \n ### Instruc-
+tion: \n Answer the ques-
+tion below concisely in a few
+words. \n\n ### Input: \n
+{query}
+Pseudo-Passage Please provide background
+for the question below in 100
+words. Do not respond with
+anything other than back-
+ground. If you do not know
+or are unsure, please gener-
+ate “N/A” directly. Question:
+{query}
+Table 6: Full list of instructions used during zero-shot
+evaluations and pseudo-passage generation. Where
+query and passage are the paragraph to be used and
+the question to be answered.
+10757
