@@ -1,0 +1,915 @@
+\n===== PAGE 9/26 =====\nLess is More for RAG
+the evidence-budget executor fixed across methods, and vary only the reranking/admission strategy to isolate the end-
+to-end effects.
+Research Questions (RQs).
+• RQ1 (Quality–cost trade-off): Does IGP improve the end-to-end quality–cost frontier under different evidence
+budgets? Answered in subsection 4.2.
+• RQ2 (Mechanism and sensitivity): Where do the gains come from (reordering vs. admission control), and
+how sensitive is IGP to the pruning threshold and uncertainty-estimation hyperparameters? Answered in
+subsection 4.3.
+• RQ3 (Relevance ≠utility): How well do offline relevance metrics (NDCG) predict end-to-end QA quality (F1)
+under different budgets? Answered in subsubsection 4.4.1.
+• RQ4 (Retriever robustness): Do the gains of IGP persist when changing the first-stage retriever? Answered in
+subsubsection 4.4.2.
+• RQ5 (Generator robustness): Does IGP generalize across generator families and parameter scales? Answered
+in subsubsection 4.4.3.
+4.1. Experimental Setup
+This subsection details the corpus, datasets, generator backbones, prompting/decoding protocols, baselines, and
+metrics. For fair comparison, we hold the pipeline fixed—same corpus, candidate size N, prompts, decoding settings,
+and budget executor (truncate: Top-M, optionally with token guard B)—and vary only the rerank/admission
+strategy (and M in budget sweeps). Unless specified, IGP is a plug-and-play replacement for rerank; RQ4 additionally
+varies the first-stage retriever, and RQ5 varies the generator family/scale.
+4.1.1. Corpus
+We use the Wikipedia retrieval corpus released by FlashRAG (Jin et al., 2024) as the external knowledge base2.
+This corpus is built from the English Wikipedia snapshot dated 2018-12-20. After cleaning, it is segmented into non-
+overlapping passages of 100 words, resulting in about 21M passages. Unless otherwise stated, all retrieval, reranking,
+and truncation are conducted on this corpus.
+4.1.2. Datasets
+Dataset
+#Train
+#Dev
+#Test
+Category
+NQ
+79,168
+8,757
+3,610
+Real queries
+TriviaQA
+78,785
+8,837
+11,313
+Trivia facts
+PopQA
+/
+/
+14,267
+Long-tail knowledge
+SQuAD
+87,599
+10,570
+/
+Reading comprehension
+AmbigQA
+10,036
+2,002
+/
+Disambiguation
+Table 2
+Dataset statistics and category labels (bold indicates the split used in our evaluation).
+We evaluate on five classic QA benchmarks with complementary properties: NQ (Kwiatkowski et al., 2019)
+(real-world search queries), TriviaQA (Joshi et al., 2017) (open-domain factual QA), PopQA (Mallen et al., 2023)
+(popular culture and long-tail entities), SQuAD (Rajpurkar et al., 2016) (reading comprehension / extractive-
+style), and AmbigQA (Min et al., 2020) (open-domain QA with question ambiguity, requiring multiple valid
+interpretations/answers). As shown in Table 2, we report results on the test split by default; when the test split is
+not publicly available, we use the dev split (thus NQ/TriviaQA/PopQA use test, and SQuAD/AmbigQA use dev).
+2https://huggingface.co/datasets/RUC-NLPIR/FlashRAG_datasets/blob/main/retrieval-corpus/wiki18_100w.zip
+Song et al.: Preprint submitted to Elsevier
+Page 9 of 26
+\n===== PAGE 10/26 =====\nLess is More for RAG
+4.1.3. Language Models (Generator Backbones)
+To validate the black-box usability and model-agnostic nature of IGP, and to systematically study the effect of
+model family and parameter scale on end-to-end RAG (see subsubsection 4.4.3), we choose two mainstream open-
+source instruction-tuned model families as generators: Qwen2.5-Instruct and Llama-3.x-Instruct. All models are
+from the Hugging Face (HF) hub. Inference is implemented with vLLM, and we export step-wise logits (or equivalently
+TOPK log-probabilities) without gradients or fine-tuning. These outputs are used to compute TOPK normalized
+uncertainty and information gain (IG), which drives IGP reranking and pruning.
+Qwen2.5 family (main experiments and scale ablation) Qwen2.5 provides instruction models across multiple
+scales3. Unless otherwise specified, our main setting uses:
+• Main: Qwen/Qwen2.5-7B-Instruct.
+For scale effects (subsubsection 4.4.3), we additionally evaluate:
+• Scales: Qwen/Qwen2.5-0.5B-Instruct, Qwen/Qwen2.5-1.5B-Instruct, Qwen/Qwen2.5-3B-Instruct,
+Qwen/Qwen2.5-7B-Instruct.
+Llama 3.x family (cross-family generalization and scale ablation) To test whether IGP generalizes across model
+families, we include Meta’s Llama 3.x instruction models4, covering small to medium sizes:
+• Scales: meta-llama/Llama-3.2-1B-Instruct, meta-llama/Llama-3.2-3B-Instruct, meta-llama/Llama-3.1-
+4.1.4. Prompts and Decoding Protocol
+To ensure fair end-to-end comparisons across different retrieval/reranking/truncation strategies, we fix the prompt
+templates for all experiments. We use two prompts: (A) the final RAG answer-generation prompt and (B) the
+NU/IG probing prompt. Prompt (A) enforces evidence grounding for end-to-end QA, while prompt (B) is short
+and neutral to obtain a more reliable logit-change signal with low prompt-induced disturbance. Except for document
+ordering/selection, all other input formats remain the same.
+(A) Final RAG answer-generation prompt (grounded QA) This stage requires the model to answer using only the
+provided documents and output only the answer. Let the concatenated documents be {reference} and the question
+be {question}:
+System: You are given a question and a set of documents.
+Answer the question using only the information in the documents.
+Output only the answer.
+User: Documents:
+{reference}
+Question: {question}
+Answer:
+Document concatenation format.
+[DOC 1] {passage_1}
+[DOC 2] {passage_2}
+⋯
+[DOC M] {passage_M}
+Here 𝑀is the number of retained passages, determined by the truncation depth or budget. All methods share this
+format; they only differ in passage ordering and filtering.
+3https://huggingface.co/collections/Qwen/qwen25
+4https://huggingface.co/meta-llama
+Song et al.: Preprint submitted to Elsevier
+Page 10 of 26
+\n===== PAGE 11/26 =====\nLess is More for RAG
+(B) NU/IG probing prompt (short, low disturbance) NU/IG aims to estimate distribution changes before and after
+injecting a passage, so we use a more neutral and short template to reduce prompt effects on logits. The unconditional
+template (𝑑= ∅) and the single-passage conditional template (𝑑≠∅) are:
+(1) Unconditional (d=∅):
+User: {question}
+Assistant:
+(2) Conditional (d≠∅):
+User: {question}
+Context:
+{context}
+Assistant:
+Template (1) is used to estimate ̂
+𝑁𝑈(𝑞; 𝜙, 𝐾), and template (2) is used to estimate ̂
+𝑁𝑈(𝑞∣𝑑; 𝜙, 𝐾) and compute
+𝐼𝐺(𝑑, 𝑞; 𝜙, 𝐾).
+Unified implementation conventions. All methods use the same evidence injection format and the same truncate
+executor. Except for hyperparameter sensitivity analyses in subsubsection 4.3.2, we use TOPK =128 and 𝑀𝑇= 32
+for NU/IG estimation.
+4.1.5. Baselines: Representative Retrievers, Rerankers, and Scoring Signals
+To isolate where IGP gains come from, we compare against a set of complementary and representative baselines
+along common RAG evidence-selection axes: retrieval paradigm, reranker architecture, supervision source, and
+scoring semantics. All methods are compared under the same end-to-end interface:
+retrieve →rerank →truncate,
+and we use TOPM as the evidence-injection budget interface. Since our passages are chunked with similar lengths,
+TOPM is a practical proxy for a token budget; thus differences mainly come from the rerank stage.
+Method
+Module
+Architecture / score
+Training / supervision
+BM25
+Retrieve
+Sparse term matching
+Unsupervised (heuristic)
+Contriever5
+Retrieve
+Bi-encoder dense retrieval
+Unsupervised / contrastive pretraining
+BGE6
+Rerank
+Bi-encoder similarity re-scoring
+Supervised contrastive learning
+CE7
+Rerank
+Cross-encoder relevance scoring
+Fine-tuned with relevance labels
+QLM8
+Rerank
+Generative 𝑝(𝑞∣𝑑) (Query Likelihood)
+Zero-shot (no task fine-tuning)
+YesNo9
+Rerank
+Discriminative Pr(Yes ∣𝑞, 𝑑)
+Zero-shot (no task fine-tuning)
+IGP (ours)
+Rerank
+logits→NU→IG (uncertainty reduction)
+Zero-shot (no task fine-tuning)
+Table 3
+Overview of retrievers, rerankers, and IGP used in this paper (HF links are provided in footnotes).
+Baselines and references. We compare against sparse BM25 (Robertson & Zaragoza, 2009) and unsupervised
+dense retrieval with Contriever (Izacard et al., 2022). For rerank, we consider (i) supervised relevance rerankers:
+a lightweight bi-encoder reranker (BGE) (Xiao et al., 2024) and a cross-encoder reranker (CE; MiniLM fine-tuned
+on MS MARCO) (W. Wang et al., 2020; Bajaj et al., 2016); and (ii) generator-as-a-scorer baselines: query likelihood
+modeling (QLM) (S. Zhuang et al., 2023) and a binary Yes/No discriminative prompt score (YesNo) (H. Zhuang et al.,
+2024). Finally, IGP (ours) provides a black-box, generator-aligned utility signal based on uncertainty reduction.
+4.1.6. Evaluation Metrics and Cost Accounting
+We evaluate end-to-end RAG from three aspects: (i) answer quality, (ii) inference cost, and (iii) cost-efficiency.
+Unless otherwise specified, all metrics are averaged over samples at the dataset level, where 𝑁denotes the number of
+evaluation samples and 𝑖∈{1, … , 𝑁} indexes a sample.
+Song et al.: Preprint submitted to Elsevier
+Page 11 of 26
+\n===== PAGE 12/26 =====\nLess is More for RAG
+Answer Quality: token-level 𝐹1 (F1). We use token-level Precision/Recall/𝐹1, a standard metric in open-domain
+QA. Let ̂𝑦be the predicted answer string, and let = {𝑦(1), … , 𝑦(𝑚)} be the set of 𝑚reference answers for the same
+question. We first apply a normalization function norm(⋅) (e.g., lowercasing and removing punctuation/extra spaces),
+then split by whitespace into token multisets via split(⋅). Formally, the token multiset of the prediction and the 𝑗-th
+reference are defined as:
+𝑇( ̂𝑦) = split(norm( ̂𝑦)),
+𝑇(𝑦(𝑗)) = split(norm(𝑦(𝑗))).
+(8)
+Here, 𝑇(⋅) returns a multiset of tokens, and |𝑇(⋅)| denotes the multiset cardinality (i.e., total token count, including
+repetitions).
+To compute multiset overlap, let be the token vocabulary under split(⋅), and let 𝑐(𝑡, 𝑇) be the multiplicity (count)
+of token 𝑡∈in multiset 𝑇. We define the number of overlapping tokens between prediction and reference as:
+overlap(𝑇( ̂𝑦), 𝑇(𝑦(𝑗))) =
+∑
+𝑡∈
+min
+(
+𝑐(𝑡, 𝑇( ̂𝑦)), 𝑐(𝑡, 𝑇(𝑦(𝑗))))
+.
+(9)
+Given overlap, we define token-level precision 𝑃(𝑗), recall 𝑅(𝑗), and 𝐹(𝑗)
+1
+for the 𝑗-th reference. If there is no token
+overlap, we set 𝐹(𝑗)
+1
+= 0; otherwise:
+𝑃(𝑗) = overlap
+|𝑇( ̂𝑦)| ,
+𝑅(𝑗) = overlap
+|𝑇(𝑦(𝑗))|,
+𝐹(𝑗)
+1
+= 2𝑃(𝑗)𝑅(𝑗)
+𝑃(𝑗) + 𝑅(𝑗) .
+(10)
+When multiple references are available, we take the best-matching one:
+𝐹1( ̂𝑦, ) = max
+1≤𝑗≤𝑚𝐹(𝑗)
+1 .
+(11)
+For closed-set answers {yes, no}, we use exact match (EM) under normalization:
+𝐹(𝑗)
+1
+=
+{
+1,
+norm( ̂𝑦) = norm(𝑦(𝑗)),
+0,
+otherwise.
+(12)
+Finally, the dataset-level token 𝐹1 is the mean over samples:
+F1dataset = 1
+𝑁
+𝑁
+∑
+𝑖=1
+𝐹1
+( ̂𝑦𝑖, 𝑖
+),
+(13)
+where ̂𝑦𝑖is the prediction for sample 𝑖and 𝑖is its reference set.
+Inference Cost: Average input tokens (TK). We use the average number of input tokens in the final answer-
+generation call as a proxy for inference cost. For sample 𝑖, let 𝑥𝑖be the generator input at the final stage (i.e., the
+prompt containing the selected evidence and instructions), and let tok(⋅) be the generator’s tokenizer that maps text to
+a token sequence. We define per-sample input tokens and the dataset average as:
+TK𝑖= |||tok(𝑥𝑖)|||,
+TKdataset = 1
+𝑁
+𝑁
+∑
+𝑖=1
+TK𝑖.
+(14)
+Since Transformer inference cost increases notably with context length (memory and computation), TK provides a
+reproducible proxy for throughput/latency when comparing evidence-selection strategies under the same generator.
+Cost–quality efficiency: Normalized Token Efficiency (NTE). To measure “better” and “cheaper” jointly,
+we define the relative token-efficiency improvement of a method 𝓁over a baseline 𝑏(RETRIEVER-ONLY, e.g.,
+BM25/Contriever). Let 𝐹1𝓁and 𝑇𝐾𝓁denote the dataset-level F1dataset and TKdataset achieved by method 𝓁,
+respectively (and analogously 𝐹1𝑏, 𝑇𝐾𝑏for the baseline). We define:
+NTE(𝓁) = 𝐹1𝓁∕𝑇𝐾𝓁
+𝐹1𝑏∕𝑇𝐾𝑏
+= 𝐹1𝓁
+𝐹1𝑏
+/𝑇𝐾𝓁
+𝑇𝐾𝑏
+.
+(15)
+By definition, NTE(𝑏) = 1; NTE(𝓁) > 1 means method 𝓁achieves higher answer quality per input token than the
+baseline.
+Song et al.: Preprint submitted to Elsevier
+Page 12 of 26
+\n===== PAGE 13/26 =====\nLess is More for RAG
+Retrieval quality: NDCG@k (for analysis, not the optimization target). When analyzing the relationship
+between retrieval ranking quality and end-to-end generation quality (subsubsection 4.4.1), we additionally report
+NDCG@k. Consider the top-𝑘ranked retrieved items (𝑑1, … , 𝑑𝑘) for a query, where 𝑑𝑖is the item at rank 𝑖and
+rel𝑖∈{0, 1, 2, …} is its graded relevance label. We define discounted cumulative gain (DCG) and its normalized
+version (NDCG) as:
+DCG@𝑘=
+𝑘
+∑
+𝑖=1
+2rel𝑖−1
+log2(𝑖+ 1),
+NDCG@𝑘= DCG@𝑘
+IDCG@𝑘,
+(16)
+where IDCG@𝑘is the DCG@k of the ideal ranking obtained by sorting items by descending rel𝑖.
+Selection overhead (probing/scoring calls). Some rerankers use the generator as a scorer (e.g., YesNo/QLM),
+requiring additional model calls over the candidate set; likewise, IGP requires one unconditional probing rollout and 𝑁
+conditional probing rollouts per query. Therefore, IGP’s extra probing cost is of the same order as other LLM-based
+scoring baselines (e.g., YesNo/QLM) when applied to the same candidate size 𝑁. To keep the cost reporting aligned
+with deployment-time context length under a fixed TOPM interface, we report TK for the final answer-generation
+stage; selection overhead is comparable among LLM-based rerankers and can be batched/parallelized in practice (see
+subsection 3.5).
+4.2. Main Experimental Results (RQ1)
+Table 4 reports end-to-end performance when using BM25 as the first-stage retriever. All methods share the same
+corpus, prompts, generator, decoding settings, candidate size, and the same budget executor truncate (TOPM); we
+only change the rerank/admission strategy. Overall, IGP consistently improves the quality–cost trade-off: it reduces
+input tokens while maintaining or improving answer F1 under the same TOPM interface.
+TOPM = 5: reordering alone is almost ineffective; admission control is the main driver. With a wider evi-
+dence budget, most reranking methods behave similarly to the retriever-only baseline. Relevance rerankers (+CE/+BGE)
+and generator-as-scorer baselines (+YesNo/+QLM) leave the final context nearly unchanged because truncate will still
+admit five passages, so the token cost remains around the BM25 baseline and F1 changes are marginal. Likewise, using
+IG only as a sorting score (+IG) provides little end-to-end gain, indicating that “utility-aware ordering without filtering”
+is insufficient under a wide budget.
+In contrast, once threshold-based pruning is enabled, the improvements become substantial. IGP(𝑇𝑝=0.0) already
+reduces TK notably while improving average F1, and a slightly more conservative barrier IGP(𝑇𝑝=0.05) further pushes
+the operating point to a markedly better region (higher F1 with much fewer tokens). This pattern supports our central
+mechanism: under multi-evidence injection, the bottleneck is often not retrieval recall but which evidence should be
+admitted under a limited budget. Filtering weak/negative-utility passages reduces redundancy and conflicts that would
+otherwise spread the generator distribution and destabilize the final answer.
+TOPM = 1: utility-aware admission improves both accuracy and efficiency. Under the tightest budget, only
+one passage can enter the context. Here, the problem becomes selecting evidence that is not only relevant, but also
+decisive enough to make generation concentrated on key tokens. Relevance rerankers improve F1 over BM25 but keep
+TK almost unchanged, yielding limited efficiency gains. IGP couples utility-aware ordering with an explicit admission
+barrier: it improves F1 while simultaneously reducing input tokens by filtering out passages that are relevant yet non-
+conclusive or ambiguity-inducing. As a result, IGP achieves consistently stronger quality–cost trade-offs under TOPM
+= 1.
+Pareto view: IGP strengthens the frontier under BM25. Figure 3 summarizes the budget sweep in a single
+quality–cost plane. Across TOPM, conventional rerankers mostly trace curves close to the BM25 baseline, reflecting
+the limited effect of reordering when most retrieved passages are still admitted. IGP produces an upper-left shift of the
+frontier, meaning it reaches comparable (or better) F1 with fewer input tokens, and yields more attractive deployment
+operating points.
+4.3. Ablation Study (RQ2)
+This subsection answers RQ2: how sensitive IGP is to the pruning threshold 𝑇𝑝, and how uncertainty-estimation
+hyperparameters (TOPK, 𝑀𝑇) affect stability and end-to-end performance.
+Song et al.: Preprint submitted to Elsevier
+Page 13 of 26
+\n===== PAGE 14/26 =====\nLess is More for RAG
+Method
+NQ
+TriviaQA
+PopQA
+SQuAD
+AmbigQA
+Avg.
+F1(↑)
+TK(↓)
+NTE(↑)
+F1(↑)
+TK(↓)
+NTE(↑)
+F1(↑)
+TK(↓)
+NTE(↑)
+F1(↑)
+TK(↓)
+NTE(↑)
+F1(↑)
+TK(↓)
+NTE(↑)
+F1(↑)
+TK(↓)
+NTE(↑)
+TopM=1
+BM25
+.149
+215.6
+1.0
+.430
+224.8
+1.0
+.169
+212.5
+1.0
+.164
+213.5
+1.0
+.191
+216.4
+1.0
+.221
+216.6
+1.0
++CE
+.203
+214.7
+1.4
+.477
+224.2
+1.1
+.205
+214.7
+1.2
+.219
+212.4
+1.3
+.266
+215.5
+1.4
+.274
+216.3
+1.2
++BGE
+.206
+213.8
+1.4
+.469
+224.0
+1.1
+.199
+213.8
+1.2
+.196
+211.8
+1.2
+.252
+215.5
+1.3
+.264
+215.8
+1.2
++YesNo
+.178
+209.2
+1.2
+.456
+220.6
+1.1
+.186
+207.8
+1.1
+.187
+208.0
+1.2
+.233
+210.6
+1.3
+.248
+211.2
+1.2
++QLM
+.176
+208.5
+1.2
+.464
+221.6
+1.1
+.186
+210.2
+1.1
+.210
+211.2
+1.3
+.204
+210.4
+1.1
+.248
+212.4
+1.1
++IG
+.185
+214.5
+1.2
+.457
+224.8
+1.1
+.179
+212.5
+1.1
+.188
+213.7
+1.1
+.237
+215.9
+1.2
+.249
+216.3
+1.1
++IGP(0.0)
+.221
+182.5
+1.8
+.494
+196.0
+1.3
+.196
+197.9
+1.2
+.209
+194.0
+1.4
+.289
+184.2
+1.8
+.282
+190.9
+1.4
++IGP(0.05)
+.253
+103.8
+3.5
+.513
+102.9
+2.6
+.228
+137.0
+2.1
+.235
+123.2
+2.5
+.334
+109.5
+3.4
+.312
+115.3
+2.7
+TopM=5
+BM25
+.214
+835.2
+1.0
+.504
+853.5
+1.0
+.211
+833.4
+1.0
+.227
+822.8
+1.0
+.282
+839.5
+1.0
+.288
+836.9
+1.0
++CE
+.212
+835.2
+1.0
+.506
+853.5
+1.0
+.209
+833.4
+1.0
+.226
+822.8
+1.0
+.276
+839.5
+1.0
+.286
+836.9
+1.0
++BGE
+.211
+835.2
+1.0
+.505
+853.5
+1.0
+.210
+833.4
+1.0
+.225
+822.8
+1.0
+.271
+839.5
+1.0
+.284
+836.9
+1.0
++YesNo
+.214
+835.2
+1.0
+.506
+853.5
+1.0
+.211
+833.4
+1.0
+.225
+822.8
+1.0
+.280
+839.5
+1.0
+.287
+836.9
+1.0
++QLM
+.212
+835.2
+1.0
+.506
+853.5
+1.0
+.210
+833.4
+1.0
+.228
+822.8
+1.0
+.279
+839.5
+1.0
+.287
+836.9
+1.0
++IG
+.214
+835.2
+1.0
+.505
+853.5
+1.0
+.208
+833.4
+1.0
+.227
+822.8
+1.0
+.284
+839.5
+1.0
+.288
+836.9
+1.0
++IGP(0.0)
+.242
+463.5
+2.0
+.527
+486.8
+1.8
+.219
+585.3
+1.5
+.238
+537.4
+1.6
+.321
+481.1
+2.0
+.310
+510.8
+1.8
++IGP(0.05)
+.257
+168.2
+6.0
+.520
+155.3
+5.7
+.238
+281.6
+3.3
+.248
+225.1
+4.0
+.345
+184.0
+5.6
+.322
+202.9
+4.6
+Table 4
+End-to-end RAG results with BM25 retrieval. We compare reranking/admission strategies under a fixed pipeline
+retrieve→rerank→truncate, where only the rerank stage is replaced (IGP) and the budget executor truncate remains
+unchanged. We report token-level answer F1 (higher is better), average final-stage input tokens TK (lower is better), and
+normalized token efficiency NTE (higher is better; relative to the retriever-only baseline under the same TopM). Results
+are shown for two evidence budgets (TopM = 1 and TopM = 5) on five QA benchmarks and their average. IGP(𝑇𝑝)
+denotes Information Gain Pruning with pruning threshold 𝑇𝑝(admission barrier).
+100
+200
+300
+400
+500
+600
+700
+800
+Average Input Tokens
+0.22
+0.24
+0.26
+0.28
+0.30
+0.32
+F1 Score
+BM25
++CE
++BGE
++YesNo
++QLM
++IGP(0.0)
++IGP(0.05)
+Figure 3: Quality–cost Pareto frontiers under BM25 retrieval. We plot the cross-dataset average token-level F1 (higher is
+better) against the average final-stage input tokens TK (lower is better), averaging over NQ, TriviaQA, PopQA, SQuAD,
+and AmbigQA. Each curve is obtained by sweeping the evidence budget TopM; each point corresponds to a feasible
+deployment operating point under the same truncate budget interface. Curves closer to the upper-left indicate a better
+quality–cost trade-off.
+Song et al.: Preprint submitted to Elsevier
+Page 14 of 26
+\n===== PAGE 15/26 =====\nLess is More for RAG
+4.3.1. Sensitivity to the IGP Threshold 𝑇𝑝(RQ2)
+0.2
+0.1
+0.0
+0.1
+0.2
+Threshold
+0.20
+0.25
+0.30
+0.35
+0.40
+0.45
+0.50
+0.55
+F1 Score
+Dataset
+NQ
+TriviaQA
+PopQA
+SQuAD
+AmbigQA
+Figure 4: Sensitivity of IGP to the pruning threshold 𝑇𝑝under TopM = 1 (token-level F1).
+A stable “sweet spot”: too low introduces noise, too high reduces coverage. Under a tight evidence budget
+(TOPM = 1), 𝑇𝑝is essentially the admission barrier for the single evidence slot: a candidate passage is admitted only
+if 𝐼𝐺(𝑑, 𝑞; 𝜙, 𝐾) (Eq. (7)) is not smaller than 𝑇𝑝. Thus, 𝑇𝑝directly controls the trade-off between denoising strength
+and coverage.
+A clear unimodal trend across datasets, with the peak near small positive values. We fix all other settings as
+in the main experiments (subsection 4.1) and scan 𝑇𝑝under TOPM = 1. As shown in Figure 4, when 𝑇𝑝increases from
+negative/near-zero values to a small positive range, end-to-end F1 rises and reaches a peak; when 𝑇𝑝increases further,
+F1 gradually drops. This unimodal pattern appears consistently on NQ, TriviaQA, PopQA, SQuAD, and AmbigQA.
+Why: low thresholds lose to “noisy/conflicting occupancy,” high thresholds lose to “missing evidence.”
+When 𝑇𝑝is low, weak-gain or negative-gain passages (𝐼𝐺≤0) are more likely to pass admission control, occupying
+the only evidence slot with more discussion-like or multi-claim content. Such evidence can introduce competing
+hypotheses or conditional constraints, making the generation distribution less concentrated on the correct answer
+tokens and lowering F1. When 𝑇𝑝is too high, some passages that are necessary or complementary (but with smaller
+single-passage gain) may also be filtered out, making the context miss key details and again lowering F1. Therefore, the
+optimal region is usually in the middle: filter weak/negative-utility evidence while not sacrificing too much coverage.
+The sweet spot is somewhat transferable, but the absolute scale of 𝑇𝑝is not universal. Figure 4 shows that
+peaks cluster in a similar range (often around 𝑇𝑝≈0.05 in our setting), suggesting that large-scale tuning per dataset
+is usually unnecessary. However, the absolute value of 𝑇𝑝depends on the distribution of 𝐼𝐺, which can change with
+the generator family/scale, tokenization and decoding details, and the question distribution. Thus, when switching
+generators or tasks, it is better to scan within a narrow range to re-locate the sweet spot, rather than assuming a fixed
+constant transfers directly.
+Song et al.: Preprint submitted to Elsevier
+Page 15 of 26
+\n===== PAGE 16/26 =====\nLess is More for RAG
+2
+4
+8
+16
+32
+64
+128
+256
+512
+1024
+TopK
+1
+2
+4
+8
+16
+32
+64
+128
+MT
+0.232
+0.231
+0.233
+0.232
+0.234
+0.235
+0.234
+0.234
+0.236
+0.235
+0.237
+0.240
+0.242
+0.242
+0.240
+0.238
+0.238
+0.238
+0.238
+0.238
+0.244
+0.243
+0.240
+0.242
+0.243
+0.240
+0.239
+0.239
+0.236
+0.235
+0.242
+0.243
+0.241
+0.241
+0.241
+0.240
+0.238
+0.236
+0.236
+0.234
+0.246
+0.250
+0.256
+0.254
+0.253
+0.251
+0.248
+0.246
+0.247
+0.244
+0.252
+0.256
+0.257
+0.259
+0.255
+0.256
+0.257
+0.258
+0.254
+0.252
+0.255
+0.257
+0.257
+0.258
+0.259
+0.259
+0.259
+0.258
+0.259
+0.258
+0.254
+0.255
+0.257
+0.258
+0.261
+0.259
+0.261
+0.259
+0.258
+0.257
+0.235
+0.240
+0.245
+0.250
+0.255
+0.260
+(a) TOPK–𝑀𝑇heatmap.
+22
+24
+26
+28
+210
+TopK (log scale)
+0.230
+0.235
+0.240
+0.245
+0.250
+0.255
+0.260
+F1 Score
+MT=1
+MT=4
+MT=16
+MT=32
+MT=64
+MT=128
+(b) TOPK–F1.
+0
+20
+40
+60
+80
+100
+120
+MT
+0.235
+0.240
+0.245
+0.250
+0.255
+0.260
+F1 Score
+TopK=2
+TopK=8
+TopK=32
+TopK=128
+TopK=512
+(c) 𝑀𝑇–F1.
+Figure 5: Sensitivity to TopK and maximum rollout length 𝑀𝑇(end-to-end F1). (a) A heatmap of F1 over a 2D grid of
+(𝐾, 𝑀𝑇); (b) the marginal curve of TopK with fixed 𝑀𝑇; (c) the marginal curve of 𝑀𝑇with fixed TopK. Here 𝐾is
+the truncation size for TopK renormalization (Eq. (2)), and 𝑀𝑇is the maximum rollout length with the effective-length
+rule in Eq. (1). Overall, 𝑀𝑇plays a more dominant role, while TopK becomes robust once it reaches moderate values.
+4.3.2. Sensitivity of Uncertainty Estimation: TOPK and MaxTokens (𝑀𝑇) (RQ2)
+𝑀𝑇matters more than TOPK, and both show clear plateaus at moderate values. The IGP signal depends
+on uncertainty estimation: under greedy rollout (temperature 0), we construct a TOPK-truncated and renormalized
+distribution (Eq. (2)), compute token-level entropy and normalized uncertainty (Eq. (3)–(4)), average over time to
+obtain ̂
+𝑁𝑈(Eq. (5)), and define information gain as uncertainty reduction (Eq. (7)). Therefore, TOPK and 𝑀𝑇
+affect the variance and resolution of ̂
+𝑁𝑈, which in turn affects IGP reranking and threshold-based admission. We
+systematically scan (𝐾, 𝑀𝑇) while keeping other settings fixed (subsection 4.1), and evaluate end-to-end F1 (see
+Figure 5).
+Song et al.: Preprint submitted to Elsevier
+Page 16 of 26

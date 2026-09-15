@@ -85,7 +85,18 @@ Astute RAG 证明不完美检索与内外知识冲突会严重损害 RAG，并�
 ## #2 · IGP — Information Gain Pruning（撞车最高）
 
 **原文**：Song et al. *Less is More for RAG: Information Gain Pruning…*. arXiv:2601.17532  
-**本地**：`02_IGP-信息增益剪枝.pdf`
+**本地**：`02_IGP-信息增益剪枝.pdf`  
+**逐节中英精读笔记（意译）：** [`CAMUS精读/02_IGP-逐节中英精读笔记.md`](./CAMUS精读/02_IGP-逐节中英精读笔记.md)
+
+### 源码 / 数据（2026-09-14）
+
+| 项 | 结论 |
+|----|------|
+| **官方源码** | **未见公开**（PDF/arXiv 无 GitHub；网上无作者仓） |
+| **评测数据** | ✅ 可公开获取：FlashRAG Wiki 语料 + NQ/TriviaQA/PopQA/SQuAD/AmbigQA |
+| **对本项目** | SAFE-U 按 §3 自实现 IG 探针即可；不必复现 Wiki 全库主表 |
+
+详情见精读笔记 [「源码与数据能否获取」](./CAMUS精读/02_IGP-逐节中英精读笔记.md#源码与数据能否获取2026-09-14-核验)。
 
 ### 设定
 
